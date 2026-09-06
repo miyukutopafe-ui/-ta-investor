@@ -157,6 +157,73 @@
     .rr-box { background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:10px; }
     .rr-box .k { color:var(--muted); font-size:10px; }
     .rr-box .v { font-size:16px; font-weight:900; margin-top:3px; }
+
+    .top-tabs {
+      display:flex; gap:8px; margin-bottom:14px;
+      background:var(--card); border:1px solid var(--line); border-radius:14px; padding:4px;
+    }
+    .top-tab {
+      flex:1; border:0; border-radius:10px; padding:10px 8px;
+      background:transparent; color:var(--muted); font-weight:850; font-size:13px;
+    }
+    .top-tab.active { background:var(--cyan); color:#001017; }
+    .screen-head { display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
+    .screen-head h2 { margin:0; font-size:20px; }
+    .screen-head p { margin:4px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+    .preset-scroll {
+      display:flex; gap:8px; overflow-x:auto; padding:2px 0 10px;
+      scrollbar-width:none; -webkit-overflow-scrolling:touch;
+    }
+    .preset-scroll::-webkit-scrollbar { display:none; }
+    .preset {
+      flex:0 0 auto; border:1px solid var(--line); border-radius:999px;
+      padding:9px 12px; background:var(--card2); color:var(--muted);
+      font-weight:800; font-size:11px;
+    }
+    .preset.active { background:var(--cyan); color:#001017; border-color:var(--cyan); }
+    .sort-row { display:flex; align-items:center; gap:8px; margin:4px 0 12px; }
+    .sort-row .small-label { color:var(--muted); font-size:11px; white-space:nowrap; }
+    .sort-select {
+      flex:1; border:1px solid var(--line); border-radius:11px;
+      padding:9px 10px; background:var(--card2); color:var(--text);
+      font-weight:750; font-size:12px; outline:none;
+    }
+    .scan-summary {
+      display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px;
+    }
+    .summary-box {
+      background:var(--card); border:1px solid var(--line); border-radius:13px; padding:10px;
+    }
+    .summary-box .k { color:var(--muted); font-size:10px; }
+    .summary-box .v { font-weight:900; font-size:20px; margin-top:3px; }
+    .screen-list { display:grid; gap:10px; }
+    .screen-card {
+      background:var(--card); border:1px solid var(--line); border-radius:18px;
+      padding:14px; box-shadow:var(--shadow);
+    }
+    .screen-card:active { transform:scale(.995); }
+    .screen-top { display:flex; gap:10px; align-items:flex-start; }
+    .screen-symbol { font-size:19px; font-weight:900; }
+    .screen-action { font-size:11px; color:var(--muted); margin-top:2px; }
+    .screen-main-score { margin-left:auto; text-align:right; }
+    .screen-main-score strong { font-size:26px; line-height:1; }
+    .screen-main-score div { color:var(--muted); font-size:10px; margin-top:3px; }
+    .mini-grid {
+      display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:11px;
+    }
+    .mini {
+      background:var(--card2); border-radius:10px; padding:8px 6px; min-width:0;
+    }
+    .mini .k { color:var(--muted); font-size:9px; white-space:nowrap; }
+    .mini .v { font-size:12px; font-weight:850; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .screen-note {
+      margin-top:8px; color:var(--muted); font-size:10px; line-height:1.45;
+    }
+    .screen-empty {
+      padding:42px 16px; text-align:center; color:var(--muted);
+      background:var(--card); border:1px solid var(--line); border-radius:18px; line-height:1.7;
+    }
+
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -180,15 +247,60 @@
 
   <main>
     <section id="listView">
-      <div id="apiNotice" class="notice">
-        最初に右上の⚙︎からTwelve DataのAPIキーを設定してください。APIキーはこのiPhone内だけに保存します。
+      <div class="top-tabs">
+        <button class="top-tab active" id="watchTabBtn">ウォッチリスト</button>
+        <button class="top-tab" id="screenTabBtn">スクリーナー</button>
       </div>
-      <div class="row addbar">
-        <input id="symbolInput" placeholder="ティッカー例: NVDA" autocomplete="off" autocapitalize="characters">
-        <button class="primary" id="addBtn">追加</button>
+
+      <div id="watchPanel">
+        <div id="apiNotice" class="notice">
+          最初に右上の⚙︎からTwelve DataのAPIキーを設定してください。APIキーはこのiPhone内だけに保存します。
+        </div>
+        <div class="row addbar">
+          <input id="symbolInput" placeholder="ティッカー例: NVDA" autocomplete="off" autocapitalize="characters">
+          <button class="primary" id="addBtn">追加</button>
+        </div>
+        <div id="watchlist" class="watchlist"></div>
+        <div id="emptyState" class="empty hidden">銘柄がありません。<br>上の欄からティッカーを追加してください。</div>
       </div>
-      <div id="watchlist" class="watchlist"></div>
-      <div id="emptyState" class="empty hidden">銘柄がありません。<br>上の欄からティッカーを追加してください。</div>
+
+      <div id="screenPanel" class="hidden">
+        <div class="screen-head">
+          <div class="grow">
+            <h2>スクリーナー</h2>
+            <p>ウォッチリスト内の取得済み日足を、現在のTAロジックで横断比較します。</p>
+          </div>
+          <button class="secondary" id="scanRefreshBtn">再計算</button>
+        </div>
+
+        <div class="preset-scroll">
+          <button class="preset active" data-preset="all">すべて</button>
+          <button class="preset" data-preset="pullback">押し目</button>
+          <button class="preset" data-preset="divergence">DIV反転</button>
+          <button class="preset" data-preset="breakout">ブレイク</button>
+          <button class="preset" data-preset="oversold">売られ過ぎ</button>
+          <button class="preset" data-preset="takeprofit">利確警戒</button>
+        </div>
+
+        <div class="sort-row">
+          <div class="small-label">並び順</div>
+          <select id="screenSort" class="sort-select">
+            <option value="timing">タイミング順</option>
+            <option value="ta">TA強度順</option>
+            <option value="div">強気DIV順</option>
+            <option value="pb">PB距離が近い順</option>
+            <option value="risk">損切り幅が狭い順</option>
+          </select>
+        </div>
+
+        <div class="scan-summary">
+          <div class="summary-box"><div class="k">判定済み</div><div class="v" id="scanCount">0</div></div>
+          <div class="summary-box"><div class="k">該当</div><div class="v" id="scanMatch">0</div></div>
+          <div class="summary-box"><div class="k">未取得</div><div class="v" id="scanMissing">0</div></div>
+        </div>
+
+        <div id="screenResults" class="screen-list"></div>
+      </div>
     </section>
 
     <section id="detailView" class="hidden">
@@ -274,6 +386,9 @@
   let currentSymbol = null;
   let refreshing = new Set();
   let chartMode = "focus";
+  let listMode = "watch";
+  let screenPreset = "all";
+  let screenSort = "timing";
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -759,9 +874,176 @@
       catch(e){ toast(`${item.symbol}: ${e.message}`); }
     }
     toast("ウォッチリストを更新しました");
+    if(listMode==="screen") renderScreener();
   }
 
   // ---------- Rendering ----------
+
+  function screenMetrics(item){
+    const c=cache[item.symbol];
+    if(!c?.candles || !Array.isArray(c.candles)) return null;
+
+    try{
+      const r=evaluateTA(item.symbol,c.candles);
+      c.result=r;
+      cache[item.symbol]=c;
+
+      const latest=r.latest.close;
+      const pbDist=(latest-r.tradePlan.pullbackEntry)/Math.max(latest,0.01)*100;
+      const erDist=(r.tradePlan.earlyReversalLevel-latest)/Math.max(latest,0.01)*100;
+      const boDist=(r.tradePlan.breakoutLevel-latest)/Math.max(latest,0.01)*100;
+
+      const bullishDivs=r.divergences.filter(d=>d.direction==="bullish");
+      const bearishDivs=r.divergences.filter(d=>d.direction==="bearish");
+      const bullDiv=bullishDivs.length?Math.max(...bullishDivs.map(d=>d.strength)):0;
+      const bearDiv=bearishDivs.length?Math.max(...bearishDivs.map(d=>d.strength)):0;
+      const confirmedBull=bullishDivs.some(d=>d.confirmed&&d.strength>=65);
+
+      return {
+        item,r,
+        pbDist:round1(pbDist),
+        erDist:round1(erDist),
+        boDist:round1(boDist),
+        bullDiv:round1(bullDiv),
+        bearDiv:round1(bearDiv),
+        confirmedBull
+      };
+    }catch{
+      return null;
+    }
+  }
+
+  function passesPreset(x){
+    const r=x.r;
+    switch(screenPreset){
+      case "pullback":
+        return r.score>=65 &&
+               r.r9<80 &&
+               x.pbDist>=-1 &&
+               x.pbDist<=4 &&
+               r.tradePlan.stopDistancePct<=10 &&
+               r.action!=="利確警戒";
+      case "divergence":
+        return x.bullDiv>=65 &&
+               x.confirmedBull &&
+               (r.r9<=-40 || r.score<60);
+      case "breakout":
+        return r.score>=65 &&
+               x.erDist>=0 &&
+               x.erDist<=4 &&
+               r.volumeRatio>=1.0 &&
+               r.r9<80;
+      case "oversold":
+        return r.r9<=-80 ||
+               (r.r9<=-60 && x.bullDiv>=55);
+      case "takeprofit":
+        return r.action==="利確警戒" ||
+               r.r9>=80 ||
+               x.bearDiv>=65;
+      default:
+        return true;
+    }
+  }
+
+  function sortScreenRows(rows){
+    const sorted=[...rows];
+    sorted.sort((a,b)=>{
+      switch(screenSort){
+        case "ta": return b.r.score-a.r.score;
+        case "div": return b.bullDiv-a.bullDiv || b.r.timingScore-a.r.timingScore;
+        case "pb": return Math.abs(a.pbDist)-Math.abs(b.pbDist);
+        case "risk": return a.r.tradePlan.stopDistancePct-b.r.tradePlan.stopDistancePct;
+        default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
+      }
+    });
+    return sorted;
+  }
+
+  function presetTitle(){
+    return {
+      all:"すべて",
+      pullback:"押し目",
+      divergence:"DIV反転",
+      breakout:"ブレイク",
+      oversold:"売られ過ぎ",
+      takeprofit:"利確警戒"
+    }[screenPreset] || "すべて";
+  }
+
+  function renderScreener(){
+    const rows=[];
+    let missing=0;
+
+    watchlist.forEach(item=>{
+      const x=screenMetrics(item);
+      if(x) rows.push(x);
+      else missing++;
+    });
+    store.cache=cache;
+
+    const matched=sortScreenRows(rows.filter(passesPreset));
+
+    $("scanCount").textContent=rows.length;
+    $("scanMatch").textContent=matched.length;
+    $("scanMissing").textContent=missing;
+
+    if(!matched.length){
+      $("screenResults").innerHTML=`<div class="screen-empty">
+        「${esc(presetTitle())}」に該当する銘柄はありません。<br>
+        <span class="small">右上↻でデータを更新すると結果が変わることがあります。</span>
+      </div>`;
+      return;
+    }
+
+    $("screenResults").innerHTML=matched.map(x=>{
+      const r=x.r;
+      const divText=x.bullDiv>0?`${Math.round(x.bullDiv)}`:"—";
+      const pbText=`${x.pbDist>=0?"+":""}${x.pbDist.toFixed(1)}%`;
+      const riskClass=r.tradePlan.stopDistancePct<=6?"risk-good":r.tradePlan.stopDistancePct<=10?"risk-mid":"risk-wide";
+      const mode=r.historyMode==="short"?`短期${r.historyCount}本`:"フル履歴";
+
+      return `<div class="screen-card" data-symbol="${esc(x.item.symbol)}">
+        <div class="screen-top">
+          <div class="grow">
+            <div class="screen-symbol">${esc(x.item.symbol)}</div>
+            <div class="screen-action">${esc(r.action)} ・ ${esc(mode)}</div>
+          </div>
+          <div class="screen-main-score">
+            <strong>${Math.round(r.timingScore)}</strong>
+            <div>Timing</div>
+          </div>
+        </div>
+
+        <div class="mini-grid">
+          <div class="mini"><div class="k">TA</div><div class="v">${Math.round(r.score)}</div></div>
+          <div class="mini"><div class="k">強気DIV</div><div class="v">${divText}</div></div>
+          <div class="mini"><div class="k">PB距離</div><div class="v">${pbText}</div></div>
+          <div class="mini"><div class="k">SL幅</div><div class="v ${riskClass}">${r.tradePlan.stopDistancePct.toFixed(1)}%</div></div>
+        </div>
+
+        <div class="screen-note">
+          RCI9 ${r.r9.toFixed(1)} / 出来高 ${r.volumeRatio.toFixed(2)}倍 /
+          ERまで ${x.erDist>=0?"+":""}${x.erDist.toFixed(1)}%
+        </div>
+      </div>`;
+    }).join("");
+
+    document.querySelectorAll(".screen-card").forEach(el=>{
+      el.addEventListener("click",()=>showDetail(el.dataset.symbol));
+    });
+  }
+
+  function setListMode(mode){
+    listMode=mode;
+    const screening=mode==="screen";
+    $("watchPanel").classList.toggle("hidden",screening);
+    $("screenPanel").classList.toggle("hidden",!screening);
+    $("watchTabBtn").classList.toggle("active",!screening);
+    $("screenTabBtn").classList.toggle("active",screening);
+    if(screening) renderScreener();
+    else renderWatchlist();
+  }
+
   function renderWatchlist(){
     $("apiNotice").classList.toggle("hidden",!!store.apiKey);
     $("emptyState").classList.toggle("hidden",watchlist.length>0);
@@ -806,7 +1088,8 @@
     $("detailHeader").classList.add("hidden");
     $("listView").classList.remove("hidden");
     $("listHeader").classList.remove("hidden");
-    renderWatchlist();
+    if(listMode==="screen") renderScreener();
+    else renderWatchlist();
     window.scrollTo({top:0,behavior:"instant"});
   }
 
@@ -1046,6 +1329,27 @@
     $("settingsModal").classList.remove("hidden");
   }
   function closeSettings(){ $("settingsModal").classList.add("hidden"); }
+
+  $("watchTabBtn").addEventListener("click",()=>setListMode("watch"));
+  $("screenTabBtn").addEventListener("click",()=>setListMode("screen"));
+
+  document.querySelectorAll(".preset").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      screenPreset=btn.dataset.preset;
+      document.querySelectorAll(".preset").forEach(x=>x.classList.toggle("active",x===btn));
+      renderScreener();
+    });
+  });
+
+  $("screenSort").addEventListener("change",e=>{
+    screenSort=e.target.value;
+    renderScreener();
+  });
+
+  $("scanRefreshBtn").addEventListener("click",()=>{
+    renderScreener();
+    toast("取得済みデータで再計算しました");
+  });
 
   $("settingsBtn").addEventListener("click",openSettings);
   $("closeSettingsBtn").addEventListener("click",closeSettings);
