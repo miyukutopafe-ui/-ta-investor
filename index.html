@@ -384,6 +384,19 @@
       margin-top:7px; color:var(--muted); font-size:9px; line-height:1.45;
     }
     .similarity-meta strong { color:var(--text); }
+    .reference-out {
+      color:var(--muted);
+      border-color:rgba(255,255,255,.12);
+    }
+    .reference-out .v {
+      font-size:15px !important;
+      color:var(--muted) !important;
+    }
+    .oos-note {
+      margin-top:7px; padding:8px 10px; border-radius:10px;
+      background:rgba(255,255,255,.035); border:1px dashed rgba(255,255,255,.12);
+      color:var(--muted); font-size:9px; line-height:1.45;
+    }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -1805,11 +1818,39 @@
 
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.14"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.16"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
-    if(!candidates.length) return null;
+    const totalModeCandidates=candidates.length;
+
+    // Out-of-sample guard:
+    // Never use the evaluated symbol's own past observations as analogs.
+    if(symbol){
+      candidates=candidates.filter(x=>x.s!==symbol);
+    }
+
+    if(!candidates.length){
+      return {
+        referenceOut:true,
+        reason:f.m==="S"
+          ? "他銘柄の短期モード比較データがありません"
+          : "自己銘柄を除外すると比較候補がありません",
+        mode:f.m,
+        modeLabel:f.m==="S"?"短期モード":"フル履歴",
+        empiricalScore:null,
+        stats:null,
+        selectedCount:0,
+        candidateCount:0,
+        totalModeCandidates,
+        symbols:0,
+        avgSimilarity:0,
+        quality:{label:"参考外",cls:"cal-low",weight:0},
+        bucket:timingBucket(r.timingScore),
+        baseline:null,
+        currentConditions:maskNames(f.cm)
+      };
+    }
 
     const modeCandidateCount=candidates.length;
     const exactEntry=candidates.filter(x=>x.et===f.et);
@@ -1853,6 +1894,10 @@
     const avgSimilarity=round1(selected.reduce((a,z)=>a+z.sim,0)/selected.length);
     const symbols=[...new Set(rows.map(x=>x.s))];
     const quality=calibrationQuality(rows.length,symbols.length,avgSimilarity);
+    const publishable=
+      rows.length>=15 &&
+      symbols.length>=3 &&
+      avgSimilarity>=55;
 
     const rawScore=clamp(
       50+
@@ -1861,7 +1906,12 @@
       (stats.tpRate-stats.slRate)*0.12,
       0,100
     );
-    const empiricalScore=round1(50+(rawScore-50)*quality.weight);
+
+    // A numeric empirical score is only exposed when the analog set
+    // passes the minimum reliability gate.
+    const empiricalScore=publishable
+      ? round1(50+(rawScore-50)*quality.weight)
+      : null;
 
     const bucket=timingBucket(r.timingScore);
     const modeBuckets=cal.modeBuckets?.[f.m]||{};
@@ -1884,7 +1934,17 @@
       modeCandidateCount,
       exactEntryCount,
       entryFiltered,
-      selectedCount:rows.length
+      selectedCount:rows.length,
+      publishable,
+      referenceOut:!publishable,
+      reason:publishable
+        ? ""
+        : rows.length<15
+          ? `類似サンプル不足（${rows.length}/15）`
+          : symbols.length<3
+            ? `比較銘柄不足（${symbols.length}/3）`
+            : `平均類似度不足（${avgSimilarity.toFixed(0)}% / 55%）`,
+      totalModeCandidates
     };
   }
 
@@ -1893,7 +1953,7 @@
     btn.disabled=true;
     btn.textContent="計算中";
     $("calibrationResults").innerHTML="";
-    $("calProgress").textContent="Calibration 2.0 を開始します…";
+    $("calProgress").textContent="Calibration 2.1 を開始します…";
 
     const allRows=[];
     const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=55);
@@ -1930,7 +1990,7 @@
     });
 
     const calibration={
-      version:"v0.14",
+      version:"v0.16",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
@@ -1998,8 +2058,8 @@
     const box=$("calibrationResults");
     if(!box) return;
 
-    if(!calibration||calibration.version!=="v0.14"){
-      box.innerHTML=`<div class="bt-note">Calibration 2.0は未実行です。「類似校正」を押してください。</div>`;
+    if(!calibration||calibration.version!=="v0.16"){
+      box.innerHTML=`<div class="bt-note">Calibration 2.1は未実行です。「類似校正」を押してください。</div>`;
       return;
     }
 
@@ -2007,14 +2067,17 @@
       <div class="sim-note">
         類似局面検索では、短期/フル履歴を分離したうえで、
         TA・Timing・RCI9・強気DIV・Trigger・Context・Risk・出来高・エントリー型・点灯条件を比較します。
-        1銘柄が母集団を占有しないよう、類似候補は1銘柄あたり最大8件、採用は最大40件に制限します。
+        評価対象銘柄自身の過去データは検索から除外します。
+        さらに1銘柄が母集団を占有しないよう、類似候補は1銘柄あたり最大8件、採用は最大40件に制限します。
         一覧では「類似40/候補312」のように、採用数と候補数を分けて表示します。
       </div>
       ${renderModeCalibration("F",calibration)}
       ${renderModeCalibration("S",calibration)}
       <div class="cal-progress">
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
-        長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。
+        長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。<br>
+        類似実績Scoreの表示条件：類似15件以上・3銘柄以上・平均類似度55%以上。
+        条件未達は「参考外」とし、数値Scoreを表示しません。
       </div>`;
   }
 
@@ -2102,8 +2165,12 @@
         case "risk": return a.r.tradePlan.stopDistancePct-b.r.tradePlan.stopDistancePct;
         case "52high": return Math.abs(a.range52?.fromHigh??-999)-Math.abs(b.range52?.fromHigh??-999);
         case "52low": return Math.abs(a.range52?.fromLow??999)-Math.abs(b.range52?.fromLow??999);
-        case "empirical": return (b.empirical?.stats.winRate??-1)-(a.empirical?.stats.winRate??-1);
-        case "escore": return (b.empirical?.empiricalScore??-1)-(a.empirical?.empiricalScore??-1);
+        case "empirical":
+          return ((b.empirical&&!b.empirical.referenceOut)?b.empirical.stats.winRate:-1)
+               - ((a.empirical&&!a.empirical.referenceOut)?a.empirical.stats.winRate:-1);
+        case "escore":
+          return ((b.empirical&&!b.empirical.referenceOut&&b.empirical.empiricalScore!=null)?b.empirical.empiricalScore:-1)
+               - ((a.empirical&&!a.empirical.referenceOut&&a.empirical.empiricalScore!=null)?a.empirical.empiricalScore:-1);
         default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
       }
     });
@@ -2168,13 +2235,21 @@
             <div class="v">${Math.round(r.timingScore)}</div>
             <div class="sub">${esc(r.action)}</div>
           </div>
-          <div class="dual-box">
+          <div class="dual-box ${x.empirical?.referenceOut?"reference-out":""}">
             <div class="k">類似実績</div>
-            <div class="v">${x.empirical?x.empirical.empiricalScore.toFixed(0):"—"}</div>
+            <div class="v">${
+              !x.empirical
+                ? "—"
+                : x.empirical.referenceOut
+                  ? "参考外"
+                  : x.empirical.empiricalScore.toFixed(0)
+            }</div>
             <div class="sub">
-              ${x.empirical
-                ? `信頼度 ${x.empirical.quality.label}`
-                : "未校正"}
+              ${!x.empirical
+                ? "未校正"
+                : x.empirical.referenceOut
+                  ? x.empirical.reason
+                  : `信頼度 ${x.empirical.quality.label}`}
             </div>
           </div>
         </div>
@@ -2191,13 +2266,23 @@
           ERまで ${x.erDist>=0?"+":""}${x.erDist.toFixed(1)}%
         </div>
         ${x.range52?`<div class="screen-range">${x.range52.full52?"52W":"履歴内"}高値から ${x.range52.fromHigh.toFixed(1)}% / 安値から +${x.range52.fromLow.toFixed(1)}%</div>`:""}
-        ${x.empirical?`<div class="screen-range">
-          20D勝率 ${x.empirical.stats.winRate.toFixed(0)}% / 平均 ${x.empirical.stats.avgReturn>=0?"+":""}${x.empirical.stats.avgReturn.toFixed(1)}% /
-          類似 ${x.empirical.selectedCount}/${x.empirical.candidateCount} /
-          類似度 ${x.empirical.avgSimilarity.toFixed(0)}% /
-          ${x.empirical.symbols}銘柄 /
-          信頼度 ${x.empirical.quality.label}
-        </div>`:""}
+        ${x.empirical
+          ? x.empirical.referenceOut
+            ? `<div class="screen-range">
+                類似実績は参考外 / ${esc(x.empirical.reason)} /
+                類似 ${x.empirical.selectedCount}/${x.empirical.candidateCount} /
+                類似度 ${x.empirical.avgSimilarity.toFixed(0)}% /
+                ${x.empirical.symbols}銘柄
+              </div>`
+            : `<div class="screen-range">
+                20D勝率 ${x.empirical.stats.winRate.toFixed(0)}% /
+                平均 ${x.empirical.stats.avgReturn>=0?"+":""}${x.empirical.stats.avgReturn.toFixed(1)}% /
+                類似 ${x.empirical.selectedCount}/${x.empirical.candidateCount} /
+                類似度 ${x.empirical.avgSimilarity.toFixed(0)}% /
+                ${x.empirical.symbols}銘柄 /
+                信頼度 ${x.empirical.quality.label}
+              </div>`
+          : ""}
       </div>`;
     }).join("");
 
@@ -2376,7 +2461,22 @@
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       ${(()=>{
         const emp=empiricalForResult(r,symbol);
-        if(!emp) return `<div class="empirical"><div class="title">Similarity Calibration 2.0</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        if(!emp) return `<div class="empirical"><div class="title">Similarity Calibration 2.1</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        if(emp.referenceOut){
+          return `<div class="empirical">
+            <div class="title">
+              Timing ${Math.round(r.timingScore)} × 類似実績 参考外 ・ ${emp.modeLabel}
+              <span class="cal-badge cal-low">参考外</span>
+            </div>
+            <div class="oos-note">
+              ${esc(emp.reason)}。自己銘柄の過去データは類似候補から除外しています。<br>
+              類似 ${emp.selectedCount}/${emp.candidateCount} /
+              平均類似度 ${emp.avgSimilarity.toFixed(0)}% /
+              ${emp.symbols}銘柄。
+              数値Scoreは信頼条件を満たすまで表示しません。
+            </div>
+          </div>`;
+        }
         const b=emp.baseline;
         return `<div class="empirical">
           <div class="title">
