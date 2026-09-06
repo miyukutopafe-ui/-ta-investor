@@ -308,6 +308,46 @@
       background:rgba(104,227,193,.09); border:1px solid rgba(104,227,193,.20);
       color:#bff5e6; font-size:9px; font-weight:800;
     }
+    .cal-card {
+      margin-top:14px; padding:14px; border-radius:18px;
+      background:var(--card); border:1px solid var(--line); box-shadow:var(--shadow);
+    }
+    .cal-head { display:flex; gap:10px; align-items:flex-start; }
+    .cal-head h3 { margin:0; font-size:16px; }
+    .cal-sub { color:var(--muted); font-size:10px; line-height:1.5; margin-top:4px; }
+    .cal-table { display:grid; gap:7px; margin-top:12px; }
+    .cal-row {
+      display:grid; grid-template-columns:66px 1fr 1fr 48px; gap:6px;
+      align-items:center; background:var(--card2); border-radius:10px; padding:9px 8px; font-size:10px;
+    }
+    .cal-row.head { background:transparent; color:var(--muted); padding-top:0; padding-bottom:2px; }
+    .cal-row .right { text-align:right; font-variant-numeric:tabular-nums; }
+    .cal-bucket-current { outline:1px solid rgba(74,216,255,.65); background:rgba(74,216,255,.08); }
+    .cal-condition {
+      display:grid; grid-template-columns:1fr 58px 64px 44px; gap:6px;
+      align-items:center; background:var(--card2); border-radius:10px; padding:9px 8px; font-size:10px;
+    }
+    .cal-condition .name { font-weight:800; }
+    .cal-progress { color:var(--muted); font-size:10px; margin-top:8px; line-height:1.45; }
+    .cal-badge {
+      display:inline-flex; align-items:center; padding:5px 8px; border-radius:999px;
+      font-size:9px; font-weight:850; border:1px solid var(--line); background:var(--card2);
+    }
+    .cal-high { color:var(--green); border-color:rgba(67,209,123,.28); }
+    .cal-mid { color:var(--yellow); border-color:rgba(242,214,75,.28); }
+    .cal-low { color:var(--red); border-color:rgba(255,95,103,.28); }
+    .empirical {
+      margin-top:10px; padding:11px 12px; border-radius:13px;
+      background:rgba(74,216,255,.07); border:1px solid rgba(74,216,255,.18);
+    }
+    .empirical .title { font-size:10px; color:#cdeefa; font-weight:850; }
+    .empirical .numbers {
+      display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-top:8px;
+    }
+    .empirical .nbox { background:var(--card2); border-radius:10px; padding:8px; }
+    .empirical .nbox .k { font-size:8px; color:var(--muted); }
+    .empirical .nbox .v { font-size:15px; font-weight:900; margin-top:2px; }
+    .empirical .foot { color:var(--muted); font-size:9px; line-height:1.4; margin-top:7px; }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -388,6 +428,21 @@
         </div>
 
         <div id="screenResults" class="screen-list"></div>
+
+        <div class="cal-card">
+          <div class="cal-head">
+            <div class="grow">
+              <h3>スコア校正</h3>
+              <div class="cal-sub">
+                ウォッチリスト全銘柄の過去データを使い、Timing 3.0と各シグナルの「実際のその後」を集計します。
+                20営業日後を基準に、5営業日おきのサンプルを使って重複を減らします。
+              </div>
+            </div>
+            <button class="secondary" id="runCalibrationBtn">校正</button>
+          </div>
+          <div id="calProgress" class="cal-progress">まだ校正していません。</div>
+          <div id="calibrationResults"></div>
+        </div>
       </div>
     </section>
 
@@ -506,7 +561,14 @@
     get cache() {
       try { return JSON.parse(localStorage.getItem("ta_cache")) || {}; } catch { return {}; }
     },
-    set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); }
+    set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
+    get calibration() {
+      try { return JSON.parse(localStorage.getItem("ta_calibration_v013")) || null; } catch { return null; }
+    },
+    set calibration(v) {
+      if(v==null) localStorage.removeItem("ta_calibration_v013");
+      else localStorage.setItem("ta_calibration_v013", JSON.stringify(v));
+    }
   };
 
   let watchlist = store.watchlist;
@@ -1501,6 +1563,241 @@
     }
   }
 
+
+  function timingBucket(score){
+    const s=clamp(Number(score)||0,0,100);
+    if(s<20) return "0-19";
+    if(s<40) return "20-39";
+    if(s<60) return "40-59";
+    if(s<80) return "60-79";
+    return "80-100";
+  }
+
+  function calibrationQuality(n){
+    if(n>=50) return {label:"高",cls:"cal-high"};
+    if(n>=20) return {label:"中",cls:"cal-mid"};
+    return {label:"低",cls:"cal-low"};
+  }
+
+  function summarizeCalibrationRows(rows){
+    if(!rows.length) return {n:0,winRate:0,avgReturn:0,medianReturn:0,tpRate:0,slRate:0,avgMfe:0,avgMae:0};
+
+    const rets=rows.map(x=>x.forwardReturn);
+    const sorted=[...rets].sort((a,b)=>a-b);
+    const mid=Math.floor(sorted.length/2);
+    const med=sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2;
+    const resolved=rows.filter(x=>x.firstHit==="tp"||x.firstHit==="sl");
+    const tp=resolved.filter(x=>x.firstHit==="tp").length;
+    const sl=resolved.filter(x=>x.firstHit==="sl").length;
+
+    return {
+      n:rows.length,
+      winRate:round1(rows.filter(x=>x.forwardReturn>0).length/rows.length*100),
+      avgReturn:round1(rets.reduce((a,b)=>a+b,0)/rows.length),
+      medianReturn:round1(med),
+      tpRate:round1(resolved.length?tp/resolved.length*100:0),
+      slRate:round1(resolved.length?sl/resolved.length*100:0),
+      avgMfe:round1(rows.reduce((a,x)=>a+x.mfe,0)/rows.length),
+      avgMae:round1(rows.reduce((a,x)=>a+x.mae,0)/rows.length)
+    };
+  }
+
+  function calibrationConditions(r){
+    const tb=r.timingBreakdown||{};
+    const trig=(tb.triggerReasons||[]).join(" ");
+    const ctx=(tb.contextReasons||[]).join(" ");
+    const setup=(tb.setupReasons||[]).join(" ");
+    const out=[];
+
+    if(trig.includes("MA20 Reclaim")) out.push("MA20上抜け");
+    if(trig.includes("PB反発")) out.push("PB反発");
+    if(trig.includes("ER Breakout")) out.push("ER突破");
+    if(trig.includes("主要ブレイク")) out.push("主要ブレイク");
+    if(trig.includes("RCI反転")) out.push("RCI反転");
+    if(trig.includes("MACD改善")) out.push("MACD改善");
+    if(ctx.includes("MA200反発")) out.push("MA200反発");
+    if(ctx.includes("MA40反発")) out.push("MA40反発");
+    if(ctx.includes("安値切り上げ")) out.push("安値切り上げ");
+    if(r.r9<=-60) out.push("RCI低位");
+    if(r.r9>=90&&r.volumeRatio>=1.3) out.push("RCI90+出来高");
+    if(r.divergences.some(d=>d.direction==="bullish"&&d.confirmed&&d.strength>=65)) out.push("強気DIV");
+    if(r.score>=75&&(setup.includes("PB付近")||setup.includes("MA20付近")||setup.includes("MA50付近"))) out.push("強TA+押し目");
+
+    return [...new Set(out)];
+  }
+
+  function calibrationSnapshotsForSymbol(symbol,candles,horizon=20,step=5){
+    const rows=[];
+    const minBars=60;
+    const end=candles.length-1-horizon;
+    if(end<minBars-1) return rows;
+
+    for(let i=minBars-1;i<=end;i+=step){
+      try{
+        const hist=candles.slice(0,i+1);
+        const r=evaluateTA(symbol,hist);
+        const entry=candles[i].close;
+        const futureSlice=candles.slice(i+1,i+horizon+1);
+        if(futureSlice.length<horizon) continue;
+
+        const future=futureSlice[futureSlice.length-1].close;
+        const maxHigh=Math.max(...futureSlice.map(c=>c.high));
+        const minLow=Math.min(...futureSlice.map(c=>c.low));
+
+        const stop=r.timingBreakdown?.entryStop ?? r.tradePlan.stopLoss;
+        const unitRisk=Math.max(entry-stop,0.01);
+        const target2R=entry+2*unitRisk;
+        let firstHit="none";
+
+        for(const c of futureSlice){
+          const hitSL=c.low<=stop;
+          const hitTP=c.high>=target2R;
+          if(hitSL&&hitTP){ firstHit="both"; break; }
+          if(hitTP){ firstHit="tp"; break; }
+          if(hitSL){ firstHit="sl"; break; }
+        }
+
+        rows.push({
+          symbol,
+          date:candles[i].date,
+          timing:r.timingScore,
+          score:r.score,
+          bucket:timingBucket(r.timingScore),
+          conditions:calibrationConditions(r),
+          forwardReturn:round1((future-entry)/entry*100),
+          mfe:round1((maxHigh-entry)/entry*100),
+          mae:round1((minLow-entry)/entry*100),
+          firstHit
+        });
+      }catch{}
+    }
+    return rows;
+  }
+
+  async function runCalibration(){
+    const btn=$("runCalibrationBtn");
+    btn.disabled=true;
+    btn.textContent="計算中";
+    $("calibrationResults").innerHTML="";
+    $("calProgress").textContent="校正を開始します…";
+
+    const allRows=[];
+    const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=80);
+
+    if(!usable.length){
+      $("calProgress").textContent="校正できる銘柄データがありません。まず右上↻でデータを取得してください。";
+      btn.disabled=false;
+      btn.textContent="校正";
+      return;
+    }
+
+    for(let i=0;i<usable.length;i++){
+      const item=usable[i];
+      $("calProgress").textContent=`${i+1}/${usable.length} ${item.symbol} を検証中…`;
+      allRows.push(...calibrationSnapshotsForSymbol(item.symbol,cache[item.symbol].candles,20,5));
+      await new Promise(resolve=>setTimeout(resolve,0));
+    }
+
+    const bucketNames=["0-19","20-39","40-59","60-79","80-100"];
+    const buckets={};
+    bucketNames.forEach(b=>buckets[b]=summarizeCalibrationRows(allRows.filter(x=>x.bucket===b)));
+
+    const conditionNames=[
+      "MA200反発","MA40反発","MA20上抜け","PB反発","ER突破","主要ブレイク",
+      "RCI反転","MACD改善","RCI低位","RCI90+出来高","強気DIV","強TA+押し目","安値切り上げ"
+    ];
+    const conditions={};
+    conditionNames.forEach(name=>{
+      const rows=allRows.filter(x=>x.conditions.includes(name));
+      if(rows.length) conditions[name]=summarizeCalibrationRows(rows);
+    });
+
+    const calibration={
+      version:"v0.13",
+      horizon:20,
+      step:5,
+      generatedAt:new Date().toISOString(),
+      symbols:usable.map(x=>x.symbol),
+      samples:allRows.length,
+      buckets,
+      conditions
+    };
+
+    store.calibration=calibration;
+    $("calProgress").textContent=`完了：${usable.length}銘柄 / ${allRows.length}サンプル。詳細画面にも実績値を反映しました。`;
+    renderCalibrationResults(calibration);
+    btn.disabled=false;
+    btn.textContent="再校正";
+  }
+
+  function renderCalibrationResults(calibration=store.calibration,currentTiming=null){
+    const box=$("calibrationResults");
+    if(!box) return;
+
+    if(!calibration){
+      box.innerHTML=`<div class="bt-note">「校正」を押すと、取得済みのウォッチリスト全銘柄を横断検証します。</div>`;
+      return;
+    }
+
+    const buckets=["0-19","20-39","40-59","60-79","80-100"];
+    const currentBucket=currentTiming==null?null:timingBucket(currentTiming);
+
+    const condRows=Object.entries(calibration.conditions||{})
+      .filter(([,v])=>v.n>=5)
+      .sort((a,b)=>{
+        if(b[1].n!==a[1].n) return b[1].n-a[1].n;
+        return b[1].avgReturn-a[1].avgReturn;
+      });
+
+    box.innerHTML=`
+      <div class="cal-table">
+        <div class="cal-row head"><div>Timing</div><div class="right">20D勝率</div><div class="right">平均</div><div class="right">n</div></div>
+        ${buckets.map(b=>{
+          const x=calibration.buckets?.[b]||{n:0,winRate:0,avgReturn:0};
+          const cur=b===currentBucket?" cal-bucket-current":"";
+          return `<div class="cal-row${cur}">
+            <div>${b}</div>
+            <div class="right ${x.winRate>=60?"bt-good":x.winRate<45?"bt-bad":"bt-mid"}">${x.n?x.winRate.toFixed(0)+"%":"—"}</div>
+            <div class="right ${x.avgReturn>=0?"bt-good":"bt-bad"}">${x.n?(x.avgReturn>=0?"+":"")+x.avgReturn.toFixed(1)+"%":"—"}</div>
+            <div class="right">${x.n}</div>
+          </div>`;
+        }).join("")}
+      </div>
+
+      <div class="small muted" style="margin-top:14px;">条件別の実績</div>
+      <div class="cal-table">
+        ${condRows.length?condRows.map(([name,x])=>`
+          <div class="cal-condition">
+            <div class="name">${esc(name)}</div>
+            <div class="right ${x.winRate>=60?"bt-good":x.winRate<45?"bt-bad":"bt-mid"}">${x.winRate.toFixed(0)}%</div>
+            <div class="right ${x.avgReturn>=0?"bt-good":"bt-bad"}">${x.avgReturn>=0?"+":""}${x.avgReturn.toFixed(1)}%</div>
+            <div class="right">${x.n}</div>
+          </div>`).join(""):`<div class="bt-note">条件別サンプルがまだ不足しています。</div>`}
+      </div>
+
+      <div class="cal-progress">
+        基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
+        日次すべてを数えないことで、同じ上昇局面の重複カウントを抑えています。
+      </div>`;
+  }
+
+  function empiricalForResult(r){
+    const cal=store.calibration;
+    if(!cal) return null;
+
+    const bucket=timingBucket(r.timingScore);
+    const stats=cal.buckets?.[bucket];
+    if(!stats||!stats.n) return null;
+
+    const currentConditions=calibrationConditions(r);
+    const matching=currentConditions
+      .map(name=>({name,stats:cal.conditions?.[name]}))
+      .filter(x=>x.stats&&x.stats.n>=5)
+      .sort((a,b)=>b.stats.n-a.stats.n);
+
+    return {bucket,stats,matching,cal};
+  }
+
   // ---------- Rendering ----------
 
   function screenMetrics(item){
@@ -1613,6 +1910,7 @@
     $("scanCount").textContent=rows.length;
     $("scanMatch").textContent=matched.length;
     $("scanMissing").textContent=missing;
+    renderCalibrationResults(store.calibration);
 
     if(!matched.length){
       $("screenResults").innerHTML=`<div class="screen-empty">
@@ -1653,6 +1951,10 @@
           ERまで ${x.erDist>=0?"+":""}${x.erDist.toFixed(1)}%
         </div>
         ${x.range52?`<div class="screen-range">${x.range52.full52?"52W":"履歴内"}高値から ${x.range52.fromHigh.toFixed(1)}% / 安値から +${x.range52.fromLow.toFixed(1)}%</div>`:""}
+        ${(()=>{
+          const emp=empiricalForResult(r);
+          return emp?`<div class="screen-range">実績: 20D勝率 ${emp.stats.winRate.toFixed(0)}% / 平均 ${emp.stats.avgReturn>=0?"+":""}${emp.stats.avgReturn.toFixed(1)}% / n=${emp.stats.n}</div>`:"";
+        })()}
       </div>`;
     }).join("");
 
@@ -1829,6 +2131,21 @@
         : ""}
 
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
+      ${(()=>{
+        const emp=empiricalForResult(r);
+        if(!emp) return `<div class="empirical"><div class="title">実績ベースの信頼度</div><div class="foot">スクリーナーの「スコア校正」を実行すると、ここに過去実績が表示されます。</div></div>`;
+        const q=calibrationQuality(emp.stats.n);
+        const top=emp.matching.slice(0,2);
+        return `<div class="empirical">
+          <div class="title">実績ベース：Timing ${emp.bucket} <span class="cal-badge ${q.cls}">信頼度 ${q.label}</span></div>
+          <div class="numbers">
+            <div class="nbox"><div class="k">20Dプラス率</div><div class="v ${emp.stats.winRate>=60?"bt-good":emp.stats.winRate<45?"bt-bad":"bt-mid"}">${emp.stats.winRate.toFixed(0)}%</div></div>
+            <div class="nbox"><div class="k">平均リターン</div><div class="v ${emp.stats.avgReturn>=0?"bt-good":"bt-bad"}">${emp.stats.avgReturn>=0?"+":""}${emp.stats.avgReturn.toFixed(1)}%</div></div>
+            <div class="nbox"><div class="k">サンプル</div><div class="v">${emp.stats.n}</div></div>
+          </div>
+          ${top.length?`<div class="foot">${top.map(x=>`${x.name}: 勝率${x.stats.winRate.toFixed(0)}% / 平均${x.stats.avgReturn>=0?"+":""}${x.stats.avgReturn.toFixed(1)}% / n=${x.stats.n}`).join("<br>")}</div>`:""}
+        </div>`;
+      })()}
       <div class="metric-reason" style="margin-top:10px;">
         TA強度は銘柄の強さ。Timing 3.0は Setup + 4日間のTrigger Memory + Context + Entry別Riskで評価します。
       </div>`;
@@ -2115,6 +2432,14 @@
   $("screenSort").addEventListener("change",e=>{
     screenSort=e.target.value;
     renderScreener();
+  });
+
+  $("runCalibrationBtn").addEventListener("click",()=>{
+    runCalibration().catch(e=>{
+      $("calProgress").textContent=`校正中にエラー: ${e.message||String(e)}`;
+      $("runCalibrationBtn").disabled=false;
+      $("runCalibrationBtn").textContent="校正";
+    });
   });
 
   $("scanRefreshBtn").addEventListener("click",()=>{
