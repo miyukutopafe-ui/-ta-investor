@@ -138,6 +138,17 @@
     .sheet .buttons button { flex:1; }
     .spinner { width:18px;height:18px;border:2px solid #555;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite; }
     @keyframes spin { to { transform:rotate(360deg); } }
+    .decision-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+    .decision-box { background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:12px; }
+    .decision-box .k { color:var(--muted); font-size:11px; margin-bottom:5px; }
+    .decision-box .v { font-weight:900; font-size:18px; line-height:1.25; }
+    .decision-box .sub { color:var(--muted); font-size:10px; margin-top:5px; line-height:1.45; }
+    .alert { border-radius:14px; padding:12px 13px; margin-top:10px; font-size:12px; line-height:1.55; border:1px solid var(--line); background:var(--card2); }
+    .alert.bull { border-color:rgba(104,227,193,.35); background:rgba(104,227,193,.08); color:#c9fff0; }
+    .alert.bear { border-color:rgba(255,117,181,.35); background:rgba(255,117,181,.08); color:#ffd5e8; }
+    .chart-toolbar { display:flex; gap:8px; margin:0 0 10px; }
+    .chart-mode { flex:1; border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:var(--card2); color:var(--muted); font-weight:800; font-size:11px; }
+    .chart-mode.active { color:#001017; background:var(--cyan); border-color:var(--cyan); }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -186,6 +197,10 @@
 
       <div class="card">
         <h3>日足チャート</h3>
+        <div class="chart-toolbar">
+          <button class="chart-mode active" id="chartFocusBtn">価格中心</button>
+          <button class="chart-mode" id="chartAllBtn">全ライン</button>
+        </div>
         <canvas id="chart" width="720" height="720"></canvas>
         <div class="legend">
           MA20＝黄 / MA50＝橙 / MA200＝青<br>
@@ -249,6 +264,7 @@
   let cache = store.cache;
   let currentSymbol = null;
   let refreshing = new Set();
+  let chartMode = "focus";
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -497,12 +513,27 @@
     parts.push({name:"トレンド",score:tr*30,max:30,reason:trr.join(" / ")});
 
     let mo=0,mor=[];
-    if(m.histogram>0){mo+=.45;mor.push("MACDヒストグラム > 0");} else mor.push("MACDヒストグラム < 0");
-    if(r9>-80&&r9<60){mo+=.30;mor.push(`RCI9 ${r9.toFixed(1)}：反転余地`);}
-    else if(r9>=60){mo+=.10;mor.push(`RCI9 ${r9.toFixed(1)}：過熱気味`);}
-    else mor.push(`RCI9 ${r9.toFixed(1)}：弱い`);
-    if(r26>-20){mo+=.25;mor.push(`RCI26 ${r26.toFixed(1)}：中期良好`);} else mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);
-    parts.push({name:"モメンタム",score:mo*30,max:30,reason:mor.join(" / ")});
+    if(m.histogram>0){mo+=.45;mor.push("MACDヒストグラム > 0");}
+    else mor.push("MACDヒストグラム < 0");
+
+    if(r9>=80){
+      mo+=.08; mor.push(`RCI9 ${r9.toFixed(1)}：買われ過ぎ圏`);
+    } else if(r9>=40){
+      mo+=.28; mor.push(`RCI9 ${r9.toFixed(1)}：強い`);
+    } else if(r9>-80){
+      mo+=.22; mor.push(`RCI9 ${r9.toFixed(1)}：中立〜改善余地`);
+    } else {
+      mo+=.08; mor.push(`RCI9 ${r9.toFixed(1)}：売られ過ぎ圏`);
+    }
+
+    if(r26>=80){
+      mo+=.08; mor.push(`RCI26 ${r26.toFixed(1)}：中期過熱`);
+    } else if(r26>-20){
+      mo+=.25; mor.push(`RCI26 ${r26.toFixed(1)}：中期良好`);
+    } else {
+      mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);
+    }
+    parts.push({name:"モメンタム",score:Math.min(mo,1)*30,max:30,reason:mor.join(" / ")});
 
     const vr=latest.volume/Math.max(av,1);
     let vo=0,vor="";
@@ -517,7 +548,8 @@
     if(pos>=.65){st+=.35;str.push("直近20日の高値圏");}
     else if(pos>=.35){st+=.20;str.push("直近20日の中段");}
     else str.push("直近20日の安値圏");
-    if(dh>=.03){st+=.25;str.push("直近高値まで余地あり");} else str.push("直近高値が近い");
+    if(dh>=.03){st+=.25;str.push("直近高値まで余地あり");}
+    else str.push("直近高値が近い");
     parts.push({name:"価格構造",score:st*20,max:20,reason:str.join(" / ")});
 
     const divergences=detectDivergences(candles);
@@ -530,7 +562,7 @@
 
     const base=parts.reduce((s,p)=>s+p.score,0);
     const score=round1(clamp(base+divAdj,0,100));
-    const label=score>=80?"強い買い":score>=60?"買い候補":score>=40?"様子見":"売り優勢";
+    const strengthLabel=score>=80?"非常に強い":score>=65?"強い":score>=50?"中立":score>=35?"弱い":"非常に弱い";
 
     const entry1=Math.max(ma20,latest.close-.75*a14);
     const entry2=Math.max(lo,latest.close-1.5*a14);
@@ -541,7 +573,74 @@
       takeProfit1:round2(entry1+2*risk),takeProfit2:round2(entry1+3*risk)
     };
 
-    return {symbol,score,label,parts,divergences,divAdj:round1(divAdj),levels,latest,ma20,ma50,ma200};
+    const distanceToEntry1=(latest.close-entry1)/latest.close;
+    const distanceToHigh=(hi-latest.close)/latest.close;
+    const aboveMA20=latest.close>=ma20;
+    const overheated=(r9>=80 || r26>=80);
+    const oversold=(r9<=-80);
+    const strongBullDiv=divergences.some(d=>d.direction==="bullish" && d.confirmed && d.strength>=65);
+    const strongBearDiv=divergences.some(d=>d.direction==="bearish" && d.confirmed && d.strength>=65);
+
+    let timingScore=50;
+    const timingReasons=[];
+
+    if(score>=65){timingScore+=10;timingReasons.push("TA強度が高い");}
+    if(score<50){timingScore-=15;timingReasons.push("TA強度が弱い");}
+
+    if(Math.abs(distanceToEntry1)<=0.025){
+      timingScore+=18; timingReasons.push("指値①に近い");
+    } else if(distanceToEntry1>0.08){
+      timingScore-=12; timingReasons.push("指値①から上に離れている");
+    }
+
+    if(overheated){
+      timingScore-=15; timingReasons.push("RCI過熱");
+    } else if(oversold && score>=50){
+      timingScore+=10; timingReasons.push("RCI売られ過ぎ");
+    }
+
+    if(vr>=1.5 && latest.close>latest.open){
+      timingScore+=8; timingReasons.push("出来高を伴う陽線");
+    }
+
+    if(strongBullDiv){
+      timingScore+=15; timingReasons.push("確認済み強気ダイバージェンス");
+    }
+    if(strongBearDiv){
+      timingScore-=20; timingReasons.push("確認済み弱気ダイバージェンス");
+    }
+
+    if(distanceToHigh>=0 && distanceToHigh<=0.02 && !strongBullDiv){
+      timingScore-=8; timingReasons.push("直近高値が近い");
+    }
+
+    timingScore=round1(clamp(timingScore,0,100));
+
+    let action,actionDetail;
+    if(strongBearDiv || (overheated && score>=65)){
+      action="利確警戒";
+      actionDetail="強さはあるが、過熱または弱気シグナルを警戒";
+    } else if(score>=65 && timingScore>=70 && !overheated){
+      action="エントリー候補";
+      actionDetail="強いトレンドで、価格位置も比較的良好";
+    } else if(score>=60 && aboveMA20 && distanceToEntry1>0.025){
+      action="押し目待ち";
+      actionDetail="銘柄は強いが、指値①付近までの押しを待ちたい";
+    } else if(score>=50 && !aboveMA20){
+      action="ブレイク待ち";
+      actionDetail="20日線回復や直近高値突破などの確認待ち";
+    } else if(score<50){
+      action="見送り";
+      actionDetail="現時点ではテクニカル優位性が弱い";
+    } else {
+      action="様子見";
+      actionDetail="方向感または価格位置の改善待ち";
+    }
+
+    return {
+      symbol,score,strengthLabel,parts,divergences,divAdj:round1(divAdj),levels,latest,
+      ma20,ma50,ma200,r9,r26,volumeRatio:vr,timingScore,action,actionDetail,timingReasons
+    };
   }
 
   // ---------- Data ----------
@@ -603,7 +702,14 @@
     $("apiNotice").classList.toggle("hidden",!!store.apiKey);
     $("emptyState").classList.toggle("hidden",watchlist.length>0);
     $("watchlist").innerHTML=watchlist.map(item=>{
-      const c=cache[item.symbol], r=c?.result;
+      const c=cache[item.symbol];
+      let r=c?.result;
+      if(c?.candles && (!r || r.action===undefined)){
+        try{
+          r=evaluateTA(item.symbol,c.candles);
+          c.result=r; cache[item.symbol]=c; store.cache=cache;
+        }catch{}
+      }
       const loading=refreshing.has(item.symbol);
       return `<div class="stock" data-symbol="${esc(item.symbol)}">
         <div class="grow">
@@ -611,7 +717,7 @@
           <div class="name">${esc(item.name||item.symbol)}</div>
         </div>
         ${loading ? `<div class="spinner"></div>` :
-          r ? `<div><div class="score">${Math.round(r.score)}</div><div class="label">${esc(r.label)}</div></div>` :
+          r ? `<div><div class="score">${Math.round(r.score)}</div><div class="label">${esc(r.action || r.strengthLabel)}</div></div>` :
           `<div class="label">未判定</div>`}
       </div>`;
     }).join("");
@@ -650,15 +756,50 @@
     if(!data){
       $("detailPrice").textContent="未取得";
       $("detailDate").textContent="右上の↻でデータを取得してください";
-      $("scoreCard").innerHTML=`<h3>TA総合判定</h3><div class="muted small">まだデータがありません。</div>`;
-      $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
+      $("scoreCard").innerHTML=`
+      <h3>TA強度</h3>
+      <div class="hero-score">
+        <div class="num">${Math.round(r.score)}</div><div class="of">/100</div>
+        <div class="pill">${esc(r.strengthLabel)}</div>
+      </div>
+      <div class="bar"><span style="width:${clamp(r.score,0,100)}%"></span></div>
+
+      <div class="decision-grid">
+        <div class="decision-box">
+          <div class="k">エントリー判断</div>
+          <div class="v">${esc(r.action)}</div>
+          <div class="sub">${esc(r.actionDetail)}</div>
+        </div>
+        <div class="decision-box">
+          <div class="k">タイミングスコア</div>
+          <div class="v">${Math.round(r.timingScore)} / 100</div>
+          <div class="sub">${esc(r.timingReasons.slice(0,3).join(" / ") || "中立")}</div>
+        </div>
+      </div>
+
+      ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
+      <div class="metric-reason" style="margin-top:10px;">
+        TA強度は「銘柄の技術的な強さ」、エントリー判断は「今の価格位置」を別々に評価します。
+      </div>`;
+
+    const topDiv=r.divergences[0];
+    const divAlert=topDiv && topDiv.strength>=65
+      ? `<div class="alert ${topDiv.direction==="bullish"?"bull":"bear"}">
+           ${topDiv.direction==="bullish"?"▲ 強気":"▼ 弱気"}ダイバージェンス ${Math.round(topDiv.strength)}/100
+           ${topDiv.confirmed?"・確認済み":"・未確認"}
+         </div>`
+      : "";
+
+    $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
       $("levelsCard").innerHTML=`<h3>自動売買レベル</h3><div class="muted small">未判定</div>`;
       $("reasonsCard").innerHTML=`<h3>判定理由</h3><div class="muted small">未判定</div>`;
       clearChart();
       return;
     }
 
-    const {candles,result:r}=data;
+    const candles=data.candles;
+    const r=evaluateTA(symbol,candles);
+    data.result=r; cache[symbol]=data; store.cache=cache;
     $("detailPrice").textContent=money(r.latest.close);
     $("detailDate").textContent=`${r.latest.date} 日足終値`;
     $("scoreCard").innerHTML=`
@@ -671,7 +812,7 @@
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       <div class="metric-reason" style="margin-top:10px;">ダイバージェンスはベーススコアと二重計上しないよう最大±12点の独立補正。</div>`;
 
-    $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3>` +
+    $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3>${divAlert}` +
       (r.divergences.length ? r.divergences.map(d=>`
         <div class="divsig">
           <div class="divtitle">
@@ -726,9 +867,22 @@
     const ma20=smaSeries(closes,20).slice(offset),ma50=smaSeries(closes,50).slice(offset),ma200=smaSeries(closes,200).slice(offset);
 
     const pad={l:8,r:58,t:12,b:18}, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
-    let minP=Math.min(...visible.map(c=>c.low),r.levels.entry1,r.levels.entry2,r.levels.stopLoss);
-    let maxP=Math.max(...visible.map(c=>c.high),r.levels.takeProfit1,r.levels.takeProfit2);
-    const sp=Math.max(maxP-minP,.01);minP-=sp*.04;maxP+=sp*.04;
+    let minP,maxP;
+    if(chartMode==="all"){
+      minP=Math.min(...visible.map(c=>c.low),r.levels.entry1,r.levels.entry2,r.levels.stopLoss);
+      maxP=Math.max(...visible.map(c=>c.high),r.levels.takeProfit1,r.levels.takeProfit2);
+    }else{
+      const focusValues=[
+        ...visible.map(c=>c.low),...visible.map(c=>c.high),
+        ...ma20.filter(v=>v!=null),...ma50.filter(v=>v!=null)
+      ];
+      minP=Math.min(...focusValues);
+      maxP=Math.max(...focusValues);
+      const nearby=[r.levels.entry1,r.levels.entry2,r.levels.stopLoss,r.levels.takeProfit1,r.levels.takeProfit2]
+        .filter(v=>Math.abs(v-r.latest.close)/r.latest.close<=0.18);
+      if(nearby.length){ minP=Math.min(minP,...nearby); maxP=Math.max(maxP,...nearby); }
+    }
+    const sp=Math.max(maxP-minP,.01);minP-=sp*.05;maxP+=sp*.05;
     const y=p=>pad.t+ph*(1-(p-minP)/(maxP-minP));
     const x=i=>pad.l+(visible.length===1?pw/2:i*pw/(visible.length-1));
     const xAbs=i=>{const vi=i-offset;return vi>=0&&vi<visible.length?x(vi):null;};
@@ -763,9 +917,15 @@
     line(ma20,"#f2d64b",1.4);line(ma50,"#f29b4b",1.4);line(ma200,"#5b8cff",1.6);
 
     function level(p,label,color,dash){
-      const yy=y(p);ctx.save();ctx.setLineDash(dash);ctx.strokeStyle=color;ctx.lineWidth=1.1;
-      ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(pad.l+pw,yy);ctx.stroke();ctx.restore();
-      ctx.fillStyle=color;ctx.font="9px -apple-system";ctx.fillText(`${label} ${p.toFixed(2)}`,pad.l+pw+4,yy);
+      if(p>=minP && p<=maxP){
+        const yy=y(p);ctx.save();ctx.setLineDash(dash);ctx.strokeStyle=color;ctx.lineWidth=1.1;
+        ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(pad.l+pw,yy);ctx.stroke();ctx.restore();
+        ctx.fillStyle=color;ctx.font="9px -apple-system";ctx.fillText(`${label} ${p.toFixed(2)}`,pad.l+pw+4,yy);
+      }else if(chartMode==="focus"){
+        const yy=p>maxP?pad.t+7:pad.t+ph-7;
+        ctx.fillStyle=color;ctx.font="9px -apple-system";
+        ctx.fillText(`${p>maxP?"↑":"↓"} ${label} ${p.toFixed(2)}`,pad.l+pw+4,yy);
+      }
     }
     level(r.levels.takeProfit2,"TP2","#43d17b",[5,3]);
     level(r.levels.takeProfit1,"TP1","#43d17b",[3,3]);
@@ -813,6 +973,19 @@
     if(!currentSymbol)return;
     refreshSymbol(currentSymbol).catch(()=>{});
   });
+  $("chartFocusBtn").addEventListener("click",()=>{
+    chartMode="focus";
+    $("chartFocusBtn").classList.add("active");
+    $("chartAllBtn").classList.remove("active");
+    if(currentSymbol && cache[currentSymbol]) renderDetail(currentSymbol);
+  });
+  $("chartAllBtn").addEventListener("click",()=>{
+    chartMode="all";
+    $("chartAllBtn").classList.add("active");
+    $("chartFocusBtn").classList.remove("active");
+    if(currentSymbol && cache[currentSymbol]) renderDetail(currentSymbol);
+  });
+
   $("deleteBtn").addEventListener("click",()=>{
     if(!currentSymbol)return;
     const s=currentSymbol;

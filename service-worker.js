@@ -1,4 +1,4 @@
-const CACHE = "ta-investor-v1";
+const CACHE = "ta-investor-v04";
 const ASSETS = ["./","./index.html","./manifest.webmanifest","./icon-180.png","./icon-512.png"];
 
 self.addEventListener("install", event => {
