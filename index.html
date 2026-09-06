@@ -753,10 +753,27 @@
     $("detailSymbol").textContent=symbol;
     $("detailName").textContent=item.name||symbol;
 
-    if(!data){
+    if(!data || !Array.isArray(data.candles)){
       $("detailPrice").textContent="未取得";
       $("detailDate").textContent="右上の↻でデータを取得してください";
-      $("scoreCard").innerHTML=`
+      $("scoreCard").innerHTML=`<h3>TA強度</h3><div class="muted small">まだデータがありません。</div>`;
+      $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
+      $("levelsCard").innerHTML=`<h3>自動売買レベル</h3><div class="muted small">未判定</div>`;
+      $("reasonsCard").innerHTML=`<h3>判定理由</h3><div class="muted small">未判定</div>`;
+      clearChart();
+      return;
+    }
+
+    const candles=data.candles;
+    const r=evaluateTA(symbol,candles);
+    data.result=r;
+    cache[symbol]=data;
+    store.cache=cache;
+
+    $("detailPrice").textContent=money(r.latest.close);
+    $("detailDate").textContent=`${r.latest.date} 日足終値`;
+
+    $("scoreCard").innerHTML=`
       <h3>TA強度</h3>
       <div class="hero-score">
         <div class="num">${Math.round(r.score)}</div><div class="of">/100</div>
@@ -779,7 +796,7 @@
 
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       <div class="metric-reason" style="margin-top:10px;">
-        TA強度は「銘柄の技術的な強さ」、エントリー判断は「今の価格位置」を別々に評価します。
+        TA強度は銘柄の技術的な強さ、エントリー判断は今の価格位置を別々に評価します。
       </div>`;
 
     const topDiv=r.divergences[0];
@@ -789,28 +806,6 @@
            ${topDiv.confirmed?"・確認済み":"・未確認"}
          </div>`
       : "";
-
-    $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
-      $("levelsCard").innerHTML=`<h3>自動売買レベル</h3><div class="muted small">未判定</div>`;
-      $("reasonsCard").innerHTML=`<h3>判定理由</h3><div class="muted small">未判定</div>`;
-      clearChart();
-      return;
-    }
-
-    const candles=data.candles;
-    const r=evaluateTA(symbol,candles);
-    data.result=r; cache[symbol]=data; store.cache=cache;
-    $("detailPrice").textContent=money(r.latest.close);
-    $("detailDate").textContent=`${r.latest.date} 日足終値`;
-    $("scoreCard").innerHTML=`
-      <h3>TA総合判定</h3>
-      <div class="hero-score">
-        <div class="num">${Math.round(r.score)}</div><div class="of">/100</div>
-        <div class="pill">${esc(r.label)}</div>
-      </div>
-      <div class="bar"><span style="width:${clamp(r.score,0,100)}%"></span></div>
-      ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
-      <div class="metric-reason" style="margin-top:10px;">ダイバージェンスはベーススコアと二重計上しないよう最大±12点の独立補正。</div>`;
 
     $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3>${divAlert}` +
       (r.divergences.length ? r.divergences.map(d=>`
@@ -979,6 +974,7 @@
     $("chartAllBtn").classList.remove("active");
     if(currentSymbol && cache[currentSymbol]) renderDetail(currentSymbol);
   });
+
   $("chartAllBtn").addEventListener("click",()=>{
     chartMode="all";
     $("chartAllBtn").classList.add("active");
