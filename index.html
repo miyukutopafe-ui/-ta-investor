@@ -295,7 +295,7 @@
     .crosshair-readout.active { display:block; }
     .crosshair-readout strong { font-size:13px; }
     .timing-breakdown {
-      display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px;
+      display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px;
     }
     .timing-part {
       background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:10px;
@@ -798,7 +798,6 @@
     const ma40=sma(closes,40);
     const ma50=sma(closes,50);
     const ma200=sma(closes,200);
-
     const r9=rci(closes,9),r26=rci(closes,26),m=macd(closes);
     const av=avgVolume(candles,20),a14=atr(candles,14),lo=recentLow(candles,20),hi=recentHigh(candles,20);
 
@@ -835,6 +834,26 @@
       const refLatest=cset[cset.length-1];
       const refAtr=atr(cset,14);
       return Math.max(latestSwingHigh(cset),refLatest.close+0.20*refAtr);
+    }
+
+    function activeDivergences(cset){
+      const raw=detectDivergences(cset);
+      if(!raw.length) return [];
+      const refAtr=Math.max(atr(cset,14),0.01);
+      return raw.filter(d=>{
+        const age=(cset.length-1)-d.secondPivot.index;
+        if(age>15) return false;
+        const post=cset.slice(d.secondPivot.index+1);
+        if(!post.length) return true;
+        if(d.direction==="bearish"){
+          const minLow=Math.min(...post.map(c=>c.low));
+          if(minLow<=d.secondPivot.price-2*refAtr) return false;
+        }else{
+          const maxHigh=Math.max(...post.map(c=>c.high));
+          if(maxHigh>=d.secondPivot.price+2*refAtr) return false;
+        }
+        return true;
+      });
     }
 
     const earlyReversalLevel=calcEarlyReversal(candles);
@@ -886,7 +905,7 @@
     else str.push("直近高値が近い");
     parts.push({name:"価格構造",score:st*20,max:20,reason:str.join(" / ")});
 
-    const divergences=detectDivergences(candles);
+    const divergences=activeDivergences(candles);
     const best=divergences.slice().sort((a,b)=>b.strength-a.strength)[0];
     let divAdj=0;
     if(best){
@@ -916,7 +935,6 @@
     const riskFromPullback=Math.max(pullbackEntry-stopLoss,a14*0.50);
     const takeProfit1=pullbackEntry+2.0*riskFromPullback;
     const takeProfit2=pullbackEntry+3.0*riskFromPullback;
-
     const stopDistancePct=(pullbackEntry-stopLoss)/Math.max(pullbackEntry,0.01)*100;
     const stopWidthLabel=stopDistancePct<=6?"標準":stopDistancePct<=10?"やや広い":"広い";
 
@@ -933,129 +951,245 @@
       stopWidthLabel
     };
 
-    // ---------- Timing 2.0 ----------
-    const prevCandles=candles.slice(0,-1);
-    const prev2Candles=candles.slice(0,-2);
-    const prevClose=prevCandles.length?prevCandles[prevCandles.length-1].close:latest.close;
-    const prevMA20=prevCandles.length>=20?sma(prevCandles.map(c=>c.close),20):null;
-    const prevR9=prevCandles.length>=9?rci(prevCandles.map(c=>c.close),9):r9;
-    const prev2R9=prev2Candles.length>=9?rci(prev2Candles.map(c=>c.close),9):prevR9;
-    const prevMacd=prevCandles.length>=35?macd(prevCandles.map(c=>c.close)):m;
-    const prev2Macd=prev2Candles.length>=35?macd(prev2Candles.map(c=>c.close)):prevMacd;
-    const prevER=prevCandles.length>=20?calcEarlyReversal(prevCandles):earlyReversalLevel;
-
     const strongBullDiv=divergences.some(d=>d.direction==="bullish"&&d.confirmed&&d.strength>=65);
     const strongBearDiv=divergences.some(d=>d.direction==="bearish"&&d.confirmed&&d.strength>=65);
 
-    const recent3=candles.slice(-3);
-    const touchedPB=recent3.some(c=>c.low<=pullbackEntry*1.015);
-    const pbRebound=touchedPB && latest.close>pullbackEntry && latest.close>prevClose && latest.close>latest.open;
-    const ma20Reclaim=prevMA20!=null && prevClose<=prevMA20 && latest.close>ma20;
-    const erBreakout=prevClose<=prevER && latest.close>prevER;
-    const macdImproving=m.histogram>prevMacd.histogram && prevMacd.histogram>prev2Macd.histogram;
-    const rciTurning=(prevR9<=-40 && r9>prevR9+8) || (prev2R9>prevR9 && r9>prevR9+6);
-    const bullishVolume=vr>=1.3 && latest.close>latest.open;
+    // ---------- Timing 3.0 ----------
+    function signalState(cset){
+      const l=cset[cset.length-1];
+      const pset=cset.slice(0,-1);
+      const p2set=cset.slice(0,-2);
+      if(pset.length<20) return {events:[],values:{}};
+
+      const cls=cset.map(c=>c.close);
+      const pcl=pset.map(c=>c.close);
+      const p2cl=p2set.map(c=>c.close);
+
+      const lma20=sma(cls,20);
+      const pma20=sma(pcl,20);
+      const lAtr=atr(cset,14);
+      const lLo=recentLow(cset,20);
+      const lAv=avgVolume(cset,20);
+      const lVr=l.volume/Math.max(lAv,1);
+      const pClose=pset[pset.length-1].close;
+
+      let pb;
+      if(l.close>=lma20) pb=Math.max(lma20,l.close-0.75*lAtr);
+      else pb=Math.max(lLo,l.close-1.50*lAtr);
+      pb=Math.min(pb,l.close);
+
+      const recent3=cset.slice(-3);
+      const touchedPB=recent3.some(c=>c.low<=pb*1.015);
+      const pbRebound=touchedPB&&l.close>pb&&l.close>pClose&&l.close>l.open;
+      const ma20Reclaim=pma20!=null&&pClose<=pma20&&l.close>lma20;
+
+      const curER=calcEarlyReversal(cset);
+      const prevER=pset.length>=20?calcEarlyReversal(pset):curER;
+      const erBreakout=pClose<=prevER&&l.close>prevER;
+
+      const prevPrior20=pset.slice(-20);
+      const prev20High=prevPrior20.length?Math.max(...prevPrior20.map(c=>c.high)):pClose;
+      const majorBreakout=pClose<=prev20High&&l.close>prev20High&&lVr>=1.2;
+
+      const cm=macd(cls);
+      const pm=pset.length>=35?macd(pcl):cm;
+      const p2m=p2set.length>=35?macd(p2cl):pm;
+      const macdImproving=cm.histogram>pm.histogram&&pm.histogram>p2m.histogram;
+
+      const cr=rci(cls,9);
+      const pr=pset.length>=9?rci(pcl,9):cr;
+      const p2r=p2set.length>=9?rci(p2cl,9):pr;
+      const rciTurning=(pr<=-40&&cr>pr+8)||(p2r>pr&&cr>pr+6);
+
+      const bullishVolume=lVr>=1.3&&l.close>l.open;
+
+      const events=[];
+      if(pbRebound) events.push({key:"PB",label:"PB反発",pts:14});
+      if(ma20Reclaim) events.push({key:"MA20",label:"MA20 Reclaim",pts:14});
+      if(erBreakout) events.push({key:"ER",label:"ER Breakout",pts:11});
+      if(majorBreakout) events.push({key:"BO",label:"主要ブレイク",pts:12});
+      if(macdImproving) events.push({key:"MACD",label:"MACD改善",pts:7});
+      if(rciTurning) events.push({key:"RCI",label:"RCI反転",pts:8});
+      if(bullishVolume) events.push({key:"VOL",label:"出来高",pts:8});
+
+      return {
+        events,
+        values:{pb,lma20,prevER,prev20High,lAtr,lVr,ma20Reclaim,erBreakout,pbRebound,majorBreakout,macdImproving,rciTurning,bullishVolume}
+      };
+    }
+
+    const decays=[1,.80,.55,.35];
+    const triggerBest={};
+    for(let off=0;off<4;off++){
+      const cset=candles.slice(0,candles.length-off);
+      if(cset.length<35) continue;
+      const ss=signalState(cset);
+      ss.events.forEach(ev=>{
+        const val=ev.pts*decays[off];
+        if(!triggerBest[ev.key]||val>triggerBest[ev.key].score){
+          triggerBest[ev.key]={...ev,score:val,offset:off};
+        }
+      });
+    }
+    const triggerItems=Object.values(triggerBest);
+    let triggerScore=round1(clamp(triggerItems.reduce((s,x)=>s+x.score,0),0,35));
+    const triggerReasons=triggerItems
+      .sort((a,b)=>b.score-a.score)
+      .map(x=>`${x.label}${x.offset?`(${x.offset}日前)`:""}`);
+    const triggerEvents=triggerReasons.slice(0,6);
+
+    // SETUP 0-30
     const nearPB=Math.abs(latest.close-pullbackEntry)/Math.max(latest.close,0.01)<=0.035;
-    const nearMA20=ma20!=null && Math.abs(latest.close-ma20)/Math.max(latest.close,0.01)<=0.03;
-    const nearMA50=ma50!=null && Math.abs(latest.close-ma50)/Math.max(latest.close,0.01)<=0.04;
+    const nearMA20=ma20!=null&&Math.abs(latest.close-ma20)/Math.max(latest.close,0.01)<=0.03;
+    const nearMA50=ma50!=null&&Math.abs(latest.close-ma50)/Math.max(latest.close,0.01)<=0.04;
     const nearSupport=(latest.close-lo)/Math.max(latest.close,0.01)<=0.06;
 
-    // SETUP 0-40
     let setupScore=0;
     const setupReasons=[];
-    if(score>=65){setupScore+=8;setupReasons.push("TA強度が高い");}
-    else if(score>=50){setupScore+=4;setupReasons.push("TA強度は中立以上");}
+    if(score>=65){setupScore+=6;setupReasons.push("TA強度が高い");}
+    else if(score>=50){setupScore+=3;setupReasons.push("TA強度は中立以上");}
+    if(nearPB||nearMA20||nearMA50){setupScore+=8;setupReasons.push(nearPB?"PB付近":nearMA20?"MA20付近":"MA50付近");}
+    if(r9<=-80){setupScore+=7;setupReasons.push("RCI売られ過ぎ");}
+    else if(r9<=-60){setupScore+=5;setupReasons.push("RCI低位");}
+    if(strongBullDiv){setupScore+=8;setupReasons.push("確認済み強気DIV");}
+    if(nearSupport){setupScore+=4;setupReasons.push("短期サポート付近");}
+    setupScore=round1(clamp(setupScore,0,30));
 
-    if(nearPB||nearMA20||nearMA50){
-      setupScore+=10;
-      setupReasons.push(nearPB?"PB付近":nearMA20?"MA20付近":"MA50付近");
+    // CONTEXT 0-20
+    let contextScore=0;
+    const contextReasons=[];
+    const supportMA=ma200!=null?ma200:ma40;
+    const recent5=candles.slice(-5);
+    if(supportMA!=null&&recent5.some(c=>c.low<=supportMA*1.03)&&latest.close>supportMA){
+      contextScore+=8;
+      contextReasons.push(ma200!=null?"MA200反発":"MA40反発");
     }
-    if(r9<=-80){setupScore+=9;setupReasons.push("RCI売られ過ぎ");}
-    else if(r9<=-60){setupScore+=6;setupReasons.push("RCI低位");}
-    if(strongBullDiv){setupScore+=12;setupReasons.push("確認済み強気DIV");}
-    if(nearSupport){setupScore+=6;setupReasons.push("20日安値サポート付近");}
-    setupScore=round1(clamp(setupScore,0,40));
 
-    // TRIGGER 0-40
-    let triggerScore=0;
-    const triggerReasons=[];
-    const triggerEvents=[];
-    if(pbRebound){triggerScore+=14;triggerReasons.push("PB反発");triggerEvents.push("PB反発");}
-    if(ma20Reclaim){triggerScore+=14;triggerReasons.push("MA20上抜け");triggerEvents.push("MA20 Reclaim");}
-    if(erBreakout){triggerScore+=11;triggerReasons.push("ER突破");triggerEvents.push("ER Breakout");}
-    if(macdImproving){triggerScore+=7;triggerReasons.push("MACDヒストグラム3段改善");triggerEvents.push("MACD改善");}
-    if(rciTurning){triggerScore+=8;triggerReasons.push("RCI9反転");triggerEvents.push("RCI反転");}
-    if(bullishVolume){triggerScore+=8;triggerReasons.push("出来高を伴う陽線");triggerEvents.push("出来高");}
-    triggerScore=round1(clamp(triggerScore,0,40));
+    const lows10a=candles.slice(-20,-10);
+    const lows10b=candles.slice(-10);
+    if(lows10a.length&&lows10b.length){
+      const aLow=Math.min(...lows10a.map(c=>c.low));
+      const bLow=Math.min(...lows10b.map(c=>c.low));
+      if(bLow>aLow*1.02){contextScore+=5;contextReasons.push("安値切り上げ");}
+    }
 
-    // RISK / ROOM 0-20
-    let riskScore=0;
-    const riskReasons=[];
-    if(stopDistancePct<=6){riskScore+=10;riskReasons.push("SL幅≤6%");}
-    else if(stopDistancePct<=10){riskScore+=6;riskReasons.push("SL幅≤10%");}
-    else if(stopDistancePct<=15){riskScore+=3;riskReasons.push("SL幅≤15%");}
-    else riskReasons.push("SL幅が広い");
+    const atr5=atr(candles,5);
+    const prevAtr5=candles.length>8?atr(candles.slice(0,-3),5):atr5;
+    if(prevAtr5<a14*0.85&&atr5>prevAtr5*1.10&&latest.close>latest.open){
+      contextScore+=4;
+      contextReasons.push("ボラ収縮→上放れ");
+    }
 
-    const currentRisk=Math.max(latest.close-stopLoss,a14*0.25);
+    const roomTo20High=(hi-latest.close)/Math.max(latest.close,0.01)*100;
+    if(roomTo20High>=10){contextScore+=3;contextReasons.push("20日高値まで余地");}
+    contextScore=round1(clamp(contextScore,0,20));
+
+    // ENTRY-SPECIFIC RISK 0-15
+    const structuralKeys=["BO","ER","MA20","PB"];
+    const structural=triggerItems
+      .filter(x=>structuralKeys.includes(x.key))
+      .sort((a,b)=>(a.offset-b.offset)||(b.score-a.score))[0];
+
+    let entryType="現在値";
+    let entryStop=stopLoss;
+    let triggerOffset=0;
+    if(structural){
+      triggerOffset=structural.offset;
+      const idx=candles.length-1-triggerOffset;
+      const eventCandle=candles[idx];
+      const hist=candles.slice(0,idx+1);
+      const histAtr=atr(hist,14);
+      const histMA20=sma(hist.map(c=>c.close),20);
+      const histER=calcEarlyReversal(hist);
+      const prev20=hist.slice(-21,-1);
+      const histBO=prev20.length?Math.max(...prev20.map(c=>c.high)):eventCandle.high;
+
+      if(structural.key==="PB"){
+        entryType="PB反発";
+        const local=hist.slice(Math.max(0,hist.length-4));
+        entryStop=Math.min(...local.map(c=>c.low))-0.20*histAtr;
+      }else if(structural.key==="MA20"){
+        entryType="MA20 Reclaim";
+        entryStop=Math.min(eventCandle.low,histMA20??eventCandle.low)-0.25*histAtr;
+      }else if(structural.key==="ER"){
+        entryType="ER Breakout";
+        entryStop=Math.min(eventCandle.low,histER)-0.25*histAtr;
+      }else if(structural.key==="BO"){
+        entryType="Major Breakout";
+        entryStop=Math.min(eventCandle.low,histBO)-0.25*histAtr;
+      }
+    }
+    if(!(entryStop<latest.close)) entryStop=latest.close-1.5*a14;
+    entryStop=Math.max(entryStop,0.01);
+
+    const entryRisk=latest.close-entryStop;
+    const entryRiskPct=entryRisk/Math.max(latest.close,0.01)*100;
+
     const resistances=[earlyReversalLevel,reclaimLevel,breakoutLevel,hi]
       .filter(v=>v!=null&&Number.isFinite(v)&&v>latest.close*1.005)
       .sort((a,b)=>a-b);
-    const nextResistance=resistances.length?resistances[0]:takeProfit1;
-    const roomRR=(nextResistance-latest.close)/Math.max(currentRisk,0.01);
+    const nextResistance=resistances.length?resistances[0]:latest.close+2*entryRisk;
+    const roomRR=(nextResistance-latest.close)/Math.max(entryRisk,0.01);
 
-    if(roomRR>=2){riskScore+=10;riskReasons.push("次抵抗までR/R≥2");}
-    else if(roomRR>=1.5){riskScore+=7;riskReasons.push("次抵抗までR/R≥1.5");}
-    else if(roomRR>=1){riskScore+=4;riskReasons.push("次抵抗までR/R≥1");}
+    let riskScore=0;
+    const riskReasons=[];
+    if(entryRiskPct<=6){riskScore+=7;riskReasons.push("SL幅≤6%");}
+    else if(entryRiskPct<=10){riskScore+=5;riskReasons.push("SL幅≤10%");}
+    else if(entryRiskPct<=15){riskScore+=2;riskReasons.push("SL幅≤15%");}
+    else riskReasons.push("SL幅が広い");
+
+    if(roomRR>=2){riskScore+=8;riskReasons.push("次抵抗までR/R≥2");}
+    else if(roomRR>=1.5){riskScore+=6;riskReasons.push("次抵抗までR/R≥1.5");}
+    else if(roomRR>=1){riskScore+=3;riskReasons.push("次抵抗までR/R≥1");}
     else riskReasons.push("上値余地が小さい");
-    riskScore=round1(clamp(riskScore,0,20));
+    riskScore=round1(clamp(riskScore,0,15));
 
-    let timingScore=setupScore+triggerScore+riskScore;
-    const timingReasons=[...triggerReasons,...setupReasons,...riskReasons];
-
-    // Conditional penalties only when extension is not accompanied by a fresh trigger.
-    const freshTrigger=ma20Reclaim||erBreakout||pbRebound;
+    // Conditional penalties
+    const todaySignals=signalState(candles);
+    const freshTrigger=todaySignals.values.ma20Reclaim||todaySignals.values.erBreakout||todaySignals.values.pbRebound||todaySignals.values.majorBreakout;
     const ma20Extension=ma20!=null?(latest.close-ma20)/Math.max(ma20,0.01)*100:0;
+
     let timingPenalty=0;
     const penaltyReasons=[];
-
-    if((r9>=80||r26>=80) && !freshTrigger && ma20Extension>7){
-      timingPenalty+=10;
-      penaltyReasons.push("RCI過熱＋MA20から乖離");
+    if((r9>=80||r26>=80)&&!freshTrigger&&ma20Extension>7){
+      timingPenalty+=8;
+      penaltyReasons.push("RCI過熱＋MA20乖離");
     }
     if(strongBearDiv){
-      timingPenalty+=15;
-      penaltyReasons.push("確認済み弱気DIV");
+      timingPenalty+=12;
+      penaltyReasons.push("有効な弱気DIV");
     }
-    if(stopDistancePct>15){
-      timingPenalty+=5;
-      penaltyReasons.push("SL幅>15%");
+    if(entryRiskPct>18){
+      timingPenalty+=4;
+      penaltyReasons.push("Timing用SL幅>18%");
     }
 
-    timingScore=round1(clamp(timingScore-timingPenalty,0,100));
+    let timingScore=round1(clamp(setupScore+triggerScore+contextScore+riskScore-timingPenalty,0,100));
+    const timingReasons=[...triggerReasons,...setupReasons,...contextReasons,...riskReasons];
     timingReasons.push(...penaltyReasons.map(x=>`減点:${x}`));
 
     let action,actionDetail;
-    if(strongBearDiv && timingScore<65){
+    if(strongBearDiv&&timingScore<65){
       action="利確警戒";
-      actionDetail="弱気ダイバージェンスを優先。新規買いは慎重";
-    }else if(triggerScore>=20 && timingScore>=75){
+      actionDetail="有効な弱気ダイバージェンスを優先。新規買いは慎重";
+    }else if(triggerScore>=18&&timingScore>=70){
       action="エントリー候補";
-      actionDetail="セットアップに加えて反転/ブレイクのトリガーが点灯";
-    }else if(triggerScore>=20 && riskScore<8){
+      actionDetail="直近4日以内の反転/ブレイクシグナルと環境が整っている";
+    }else if(triggerScore>=14&&contextScore>=6&&timingScore>=58){
       action="シグナル点灯";
-      actionDetail="反転シグナルは出たが、損切り幅や上値余地に注意";
-    }else if(setupScore>=24 && triggerScore<15){
+      actionDetail="反転シグナルは有効。リスク/上値余地を確認";
+    }else if(setupScore>=18&&triggerScore<10){
       action="反転待ち";
-      actionDetail="買い場の準備はあるが、MA/ER/RCIなどのトリガー待ち";
-    }else if(score>=65 && triggerScore<15){
+      actionDetail="セットアップは良好。数日以内のトリガー待ち";
+    }else if(score>=65&&triggerScore<10){
       action="押し目待ち";
       actionDetail="銘柄は強い。次の押し目または再加速を待ちたい";
-    }else if(timingScore>=60){
+    }else if(timingScore>=52){
       action="様子見";
       actionDetail="条件は改善中だが、確定トリガーがもう一歩";
     }else{
       action="見送り";
-      actionDetail="現時点ではセットアップ/トリガー/リスクの合計が弱い";
+      actionDetail="現時点ではTiming 3.0の合計点が弱い";
     }
 
     return {
@@ -1063,10 +1197,10 @@
       tradePlan,latest,ma10,ma20,ma40,ma50,ma200,r9,r26,volumeRatio:vr,
       timingScore,action,actionDetail,timingReasons,
       timingBreakdown:{
-        setup:setupScore,trigger:triggerScore,risk:riskScore,penalty:timingPenalty,
-        setupReasons,triggerReasons,riskReasons,penaltyReasons,events:triggerEvents,
-        ma20Reclaim,erBreakout,pbRebound,macdImproving,rciTurning,bullishVolume,
-        roomRR:round1(roomRR),nextResistance:round2(nextResistance)
+        setup:setupScore,trigger:triggerScore,context:contextScore,risk:riskScore,penalty:timingPenalty,
+        setupReasons,triggerReasons,contextReasons,riskReasons,penaltyReasons,events:triggerEvents,
+        entryType,entryStop:round2(entryStop),entryRiskPct:round1(entryRiskPct),
+        roomRR:round1(roomRR),nextResistance:round2(nextResistance),triggerOffset
       },
       historyMode:shortHistoryMode?"short":"full",
       historyCount
@@ -1145,6 +1279,18 @@
         const maxHigh=futureSlice.length?Math.max(...futureSlice.map(c=>c.high)):future;
         const minLow=futureSlice.length?Math.min(...futureSlice.map(c=>c.low)):future;
 
+        const stop=r.timingBreakdown?.entryStop ?? r.tradePlan.stopLoss;
+        const unitRisk=Math.max(entry-stop,0.01);
+        const target2R=entry+2*unitRisk;
+        let firstHit="none";
+        for(const c of futureSlice){
+          const hitSL=c.low<=stop;
+          const hitTP=c.high>=target2R;
+          if(hitSL&&hitTP){ firstHit="both"; break; }
+          if(hitTP){ firstHit="tp"; break; }
+          if(hitSL){ firstHit="sl"; break; }
+        }
+
         rows.push({
           index:i,
           date:candles[i].date,
@@ -1154,6 +1300,9 @@
           rci9:r.r9,
           divBull:r.divergences.filter(d=>d.direction==="bullish").reduce((m,d)=>Math.max(m,d.strength),0),
           entry,
+          stop,
+          target2R,
+          firstHit,
           forwardReturn:round1((future-entry)/entry*100),
           mfe:round1((maxHigh-entry)/entry*100),
           mae:round1((minLow-entry)/entry*100)
@@ -1214,6 +1363,10 @@
     const medRet=median(returns);
     const avgMfe=avg(mfes);
     const avgMae=avg(maes);
+    const resolved=matches.filter(x=>x.firstHit==="tp"||x.firstHit==="sl");
+    const tpRate=resolved.length?resolved.filter(x=>x.firstHit==="tp").length/resolved.length*100:0;
+    const slRate=resolved.length?resolved.filter(x=>x.firstHit==="sl").length/resolved.length*100:0;
+    const ambiguous=matches.filter(x=>x.firstHit==="both").length;
 
     const sortedRecent=[...matches].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,12);
 
@@ -1226,13 +1379,17 @@
         <div class="bt-box"><div class="k">中央値</div><div class="v ${medRet>=0?"bt-good":"bt-bad"}">${medRet>=0?"+":""}${medRet.toFixed(1)}%</div></div>
         <div class="bt-box"><div class="k">平均MFE</div><div class="v bt-good">+${avgMfe.toFixed(1)}%</div></div>
         <div class="bt-box"><div class="k">平均MAE</div><div class="v bt-bad">${avgMae.toFixed(1)}%</div></div>
-        <div class="bt-box"><div class="k">現在</div><div class="v" style="font-size:13px;">TA ${Math.round(current.score)} / T2 ${Math.round(current.timingScore)}</div></div>
+        <div class="bt-box"><div class="k">2R先着率</div><div class="v ${tpRate>=50?"bt-good":"bt-mid"}">${tpRate.toFixed(0)}%</div></div>
+        <div class="bt-box"><div class="k">SL先着率</div><div class="v ${slRate<=35?"bt-good":"bt-bad"}">${slRate.toFixed(0)}%</div></div>
+        <div class="bt-box"><div class="k">現在</div><div class="v" style="font-size:13px;">TA ${Math.round(current.score)} / T3 ${Math.round(current.timingScore)}</div></div>
       </div>
 
       <div class="bt-note">
         判定日より後のデータはスコア計算に使っていません。<br>
         「プラス率」は${horizon}営業日後の終値が判定日の終値を上回った割合です。
-        MFE/MAEはその期間中の最大上昇率/最大下落率です。
+        MFE/MAEはその期間中の最大上昇率/最大下落率です。<br>
+        2R/SL先着率はTiming 3.0のエントリー別SLを使って判定します。
+        ${ambiguous?`同一日中にTP/SL両方へ触れた曖昧ケース ${ambiguous}件は先着率から除外。`:""}
       </div>
 
       <div class="bt-list">
@@ -1274,7 +1431,7 @@
       $("btDateResult").innerHTML=`
         <div class="bt-date-result">
           <div class="bt-date-title">${candles[idx].date} 時点</div>
-          <div class="small muted">終値 ${money(entry)} / TA ${Math.round(r.score)} / Timing2 ${Math.round(r.timingScore)} / ${esc(r.action)}</div>
+          <div class="small muted">終値 ${money(entry)} / TA ${Math.round(r.score)} / Timing3 ${Math.round(r.timingScore)} / ${esc(r.action)}</div>
           <div class="bt-grid">
             ${pieces}
             <div class="bt-box"><div class="k">現在まで</div><div class="v ${currentRet>=0?"bt-good":"bt-bad"}">${currentRet>=0?"+":""}${currentRet.toFixed(1)}%</div></div>
@@ -1631,7 +1788,7 @@
           <div class="sub">${esc(r.actionDetail)}</div>
         </div>
         <div class="decision-box">
-          <div class="k">Timing 2.0</div>
+          <div class="k">Timing 3.0</div>
           <div class="v">${Math.round(r.timingScore)} / 100</div>
           <div class="sub">${esc(r.timingReasons.slice(0,3).join(" / ") || "中立")}</div>
         </div>
@@ -1640,19 +1797,28 @@
       <div class="timing-breakdown">
         <div class="timing-part">
           <div class="k">SETUP</div>
-          <div class="v">${Math.round(r.timingBreakdown.setup)} / 40</div>
+          <div class="v">${Math.round(r.timingBreakdown.setup)} / 30</div>
           <div class="s">${esc(r.timingBreakdown.setupReasons.slice(0,2).join(" / ") || "なし")}</div>
         </div>
         <div class="timing-part">
           <div class="k">TRIGGER</div>
-          <div class="v">${Math.round(r.timingBreakdown.trigger)} / 40</div>
+          <div class="v">${Math.round(r.timingBreakdown.trigger)} / 35</div>
           <div class="s">${esc(r.timingBreakdown.triggerReasons.slice(0,2).join(" / ") || "未点灯")}</div>
         </div>
         <div class="timing-part">
+          <div class="k">CONTEXT</div>
+          <div class="v">${Math.round(r.timingBreakdown.context)} / 20</div>
+          <div class="s">${esc(r.timingBreakdown.contextReasons.slice(0,2).join(" / ") || "なし")}</div>
+        </div>
+        <div class="timing-part">
           <div class="k">RISK</div>
-          <div class="v">${Math.round(r.timingBreakdown.risk)} / 20</div>
+          <div class="v">${Math.round(r.timingBreakdown.risk)} / 15</div>
           <div class="s">${esc(r.timingBreakdown.riskReasons.slice(0,2).join(" / ") || "なし")}</div>
         </div>
+      </div>
+      <div class="metric-reason" style="margin-top:8px;">
+        Timing用エントリー：${esc(r.timingBreakdown.entryType)} / SL ${money(r.timingBreakdown.entryStop)} /
+        SL幅 ${r.timingBreakdown.entryRiskPct.toFixed(1)}% / 次抵抗までR/R ${r.timingBreakdown.roomRR.toFixed(1)}
       </div>
 
       ${r.timingBreakdown.events.length
@@ -1664,7 +1830,7 @@
 
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       <div class="metric-reason" style="margin-top:10px;">
-        TA強度は銘柄の強さ。Timing 2.0は Setup（準備）+ Trigger（反転/ブレイク）+ Risk（損切り/上値余地）で評価します。
+        TA強度は銘柄の強さ。Timing 3.0は Setup + 4日間のTrigger Memory + Context + Entry別Riskで評価します。
       </div>`;
 
     const range52=calc52WeekRange(candles);
