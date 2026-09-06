@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TA Investor">
+  <meta name="theme-color" content="#0b0c10">
+  <title>TA Investor</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0c10;
+      --card: #15171d;
+      --card2: #1c1f27;
+      --text: #f4f5f7;
+      --muted: #9da3ae;
+      --line: #2b303a;
+      --green: #43d17b;
+      --red: #ff5f67;
+      --cyan: #4ad8ff;
+      --yellow: #f2d64b;
+      --orange: #f29b4b;
+      --blue: #5b8cff;
+      --mint: #68e3c1;
+      --pink: #ff75b5;
+      --shadow: 0 12px 28px rgba(0,0,0,.2);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system,BlinkMacSystemFont,"SF Pro Display","Hiragino Sans","Noto Sans JP",sans-serif; }
+    body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+    button, input { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    .app { max-width: 680px; margin: 0 auto; min-height: 100vh; }
+    header {
+      position: sticky; top: 0; z-index: 20;
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      background: rgba(11,12,16,.78);
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      padding: 14px 16px 12px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .title { font-weight: 800; font-size: 22px; flex: 1; letter-spacing: -.3px; }
+    .iconbtn {
+      width: 42px; height: 42px; border: 0; border-radius: 14px;
+      background: var(--card2); color: var(--text); font-size: 20px;
+    }
+    main { padding: 16px; }
+    .notice {
+      padding: 14px; border-radius: 16px; margin-bottom: 14px;
+      background: rgba(74,216,255,.09); border: 1px solid rgba(74,216,255,.22);
+      color: #cdeefa; font-size: 13px; line-height: 1.55;
+    }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .addbar { margin-bottom: 16px; }
+    input {
+      width: 100%; border: 1px solid var(--line); border-radius: 14px;
+      padding: 13px 14px; background: var(--card); color: var(--text); outline: none;
+    }
+    input:focus { border-color: var(--cyan); }
+    .primary {
+      border: 0; border-radius: 14px; padding: 13px 16px;
+      background: var(--cyan); color: #001017; font-weight: 800; white-space: nowrap;
+    }
+    .secondary {
+      border: 1px solid var(--line); border-radius: 12px; padding: 10px 13px;
+      background: var(--card2); color: var(--text); font-weight: 700;
+    }
+    .danger { color: var(--red); }
+    .watchlist { display: grid; gap: 10px; }
+    .stock {
+      background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+      padding: 15px; box-shadow: var(--shadow);
+      display: flex; align-items: center; gap: 12px;
+    }
+    .stock:active { transform: scale(.995); }
+    .ticker { font-weight: 850; font-size: 18px; }
+    .name { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .grow { flex: 1; min-width: 0; }
+    .score { font-size: 24px; font-weight: 900; text-align: right; }
+    .label { font-size: 11px; color: var(--muted); text-align: right; margin-top: 2px; }
+    .up { color: var(--green); }
+    .down { color: var(--red); }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .empty { padding: 50px 10px; text-align:center; color: var(--muted); line-height:1.7; }
+    .hidden { display: none !important; }
+    .back { font-size: 24px; }
+    .detail-head { display:flex; align-items:flex-end; gap:10px; margin-bottom: 12px; }
+    .detail-symbol { font-size: 32px; font-weight: 900; letter-spacing: -.5px; }
+    .price { font-size: 28px; font-weight: 850; margin-top: 4px; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 20px;
+      padding: 16px; margin: 12px 0; box-shadow: var(--shadow);
+    }
+    .card h3 { margin: 0 0 12px; font-size: 15px; }
+    .hero-score { display:flex; align-items:baseline; }
+    .hero-score .num { font-size: 52px; font-weight: 950; letter-spacing:-2px; }
+    .hero-score .of { color: var(--muted); margin-left:5px; }
+    .pill {
+      margin-left:auto; padding: 7px 10px; border-radius: 999px;
+      background: var(--card2); font-size: 12px; font-weight: 800;
+    }
+    .bar { height: 8px; border-radius: 8px; overflow:hidden; background:#252a34; margin-top:12px; }
+    .bar > span { display:block; height:100%; background:var(--cyan); border-radius:8px; }
+    canvas {
+      display:block; width:100%; height:360px; background:#11131a;
+      border-radius:16px; border:1px solid var(--line);
+    }
+    .legend { font-size:11px; color:var(--muted); line-height:1.55; margin-top:9px; }
+    .metric { padding: 11px 0; border-top: 1px solid var(--line); }
+    .metric:first-of-type { border-top: 0; }
+    .metric-head { display:flex; gap:10px; align-items:center; font-size:13px; font-weight:800; }
+    .metric-reason { color:var(--muted); font-size:11px; line-height:1.5; margin-top:5px; }
+    .level { display:flex; padding:9px 0; border-bottom:1px solid var(--line); font-size:13px; }
+    .level:last-child { border:0; }
+    .level strong { margin-left:auto; font-variant-numeric:tabular-nums; }
+    .divsig { padding:12px 0; border-top:1px solid var(--line); }
+    .divsig:first-of-type { border-top:0; }
+    .divtitle { display:flex; gap:8px; align-items:center; font-weight:800; }
+    .divtitle span:last-child { margin-left:auto; }
+    .tag { padding:3px 6px; border-radius:7px; font-size:10px; background:var(--card2); color:var(--muted); }
+    .modal {
+      position:fixed; inset:0; z-index:100; display:flex; align-items:flex-end;
+      background:rgba(0,0,0,.55);
+    }
+    .sheet {
+      width:100%; max-width:680px; margin:0 auto; background:#171920;
+      border-radius:24px 24px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom));
+      border-top:1px solid var(--line);
+    }
+    .sheet h2 { margin: 0 0 16px; }
+    .sheet p { color:var(--muted); font-size:12px; line-height:1.6; }
+    .sheet .buttons { display:flex; gap:10px; margin-top:14px; }
+    .sheet .buttons button { flex:1; }
+    .spinner { width:18px;height:18px;border:2px solid #555;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .toast {
+      position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+      background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
+      max-width:90%; box-shadow:var(--shadow);
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header id="listHeader">
+    <div class="title">TA Investor</div>
+    <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
+    <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
+  </header>
+
+  <header id="detailHeader" class="hidden">
+    <button class="iconbtn back" id="backBtn" aria-label="戻る">‹</button>
+    <div class="title" id="detailHeaderTitle">銘柄</div>
+    <button class="iconbtn" id="refreshOneBtn" aria-label="更新">↻</button>
+  </header>
+
+  <main>
+    <section id="listView">
+      <div id="apiNotice" class="notice">
+        最初に右上の⚙︎からTwelve DataのAPIキーを設定してください。APIキーはこのiPhone内だけに保存します。
+      </div>
+      <div class="row addbar">
+        <input id="symbolInput" placeholder="ティッカー例: NVDA" autocomplete="off" autocapitalize="characters">
+        <button class="primary" id="addBtn">追加</button>
+      </div>
+      <div id="watchlist" class="watchlist"></div>
+      <div id="emptyState" class="empty hidden">銘柄がありません。<br>上の欄からティッカーを追加してください。</div>
+    </section>
+
+    <section id="detailView" class="hidden">
+      <div class="detail-head">
+        <div class="grow">
+          <div class="detail-symbol" id="detailSymbol"></div>
+          <div class="name" id="detailName"></div>
+          <div class="price" id="detailPrice"></div>
+          <div class="small muted" id="detailDate"></div>
+        </div>
+      </div>
+
+      <div class="card" id="scoreCard"></div>
+
+      <div class="card">
+        <h3>日足チャート</h3>
+        <canvas id="chart" width="720" height="720"></canvas>
+        <div class="legend">
+          MA20＝黄 / MA50＝橙 / MA200＝青<br>
+          DIV＝Regular divergence / H-DIV＝Hidden divergence<br>
+          実線＝確認済み / 破線＝未確認
+        </div>
+      </div>
+
+      <div class="card" id="divergenceCard"></div>
+      <div class="card" id="levelsCard"></div>
+      <div class="card" id="reasonsCard"></div>
+
+      <button class="secondary danger" id="deleteBtn" style="width:100%;margin:5px 0 24px;">この銘柄を削除</button>
+    </section>
+  </main>
+</div>
+
+<div id="settingsModal" class="modal hidden">
+  <div class="sheet">
+    <h2>設定</h2>
+    <label class="small muted">Twelve Data API key</label>
+    <input id="apiKeyInput" type="password" placeholder="API key">
+    <p>
+      日足OHLCVをTwelve Dataから取得します。個人利用向けのMVPです。
+      APIキーはこのブラウザのlocalStorageに保存され、ソースコードには埋め込みません。
+    </p>
+    <div class="buttons">
+      <button class="secondary" id="closeSettingsBtn">閉じる</button>
+      <button class="primary" id="saveSettingsBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get apiKey() { return localStorage.getItem("ta_api_key") || ""; },
+    set apiKey(v) { localStorage.setItem("ta_api_key", v); },
+    get watchlist() {
+      try {
+        return JSON.parse(localStorage.getItem("ta_watchlist")) || [
+          {symbol:"NVDA",name:"NVIDIA"},
+          {symbol:"MU",name:"Micron"},
+          {symbol:"CRDO",name:"Credo Technology"}
+        ];
+      } catch { return []; }
+    },
+    set watchlist(v) { localStorage.setItem("ta_watchlist", JSON.stringify(v)); },
+    get cache() {
+      try { return JSON.parse(localStorage.getItem("ta_cache")) || {}; } catch { return {}; }
+    },
+    set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); }
+  };
+
+  let watchlist = store.watchlist;
+  let cache = store.cache;
+  let currentSymbol = null;
+  let refreshing = new Set();
+
+  function toast(msg) {
+    $("toast").textContent = msg;
+    $("toast").classList.remove("hidden");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => $("toast").classList.add("hidden"), 2600);
+  }
+
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, ch => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    })[ch]);
+  }
+
+  function money(v) {
+    if (!Number.isFinite(v)) return "—";
+    return "$" + v.toFixed(2);
+  }
+
+  function pct(v) {
+    return (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+  }
+
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+  function round1(v){ return Math.round(v*10)/10; }
+  function round2(v){ return Math.round(v*100)/100; }
+
+  // ---------- Indicators ----------
+  function sma(values, period) {
+    if (values.length < period || period <= 0) return null;
+    let s = 0;
+    for (let i=values.length-period; i<values.length; i++) s += values[i];
+    return s/period;
+  }
+
+  function smaSeries(values, period) {
+    const out = Array(values.length).fill(null);
+    if (values.length < period) return out;
+    let rolling = 0;
+    for (let i=0;i<period;i++) rolling += values[i];
+    out[period-1] = rolling/period;
+    for (let i=period;i<values.length;i++){
+      rolling += values[i] - values[i-period];
+      out[i] = rolling/period;
+    }
+    return out;
+  }
+
+  function emaSeries(values, period) {
+    if (!values.length) return [];
+    const m = 2/(period+1);
+    const out = [values[0]];
+    let cur = values[0];
+    for (let i=1;i<values.length;i++){
+      cur = (values[i]-cur)*m+cur;
+      out.push(cur);
+    }
+    return out;
+  }
+
+  function macd(closes, fast=12, slow=26, signal=9) {
+    if (closes.length < slow+signal) return null;
+    const f=emaSeries(closes,fast), s=emaSeries(closes,slow);
+    const line=f.map((v,i)=>v-s[i]);
+    const sig=emaSeries(line,signal);
+    const i=line.length-1;
+    return {macd:line[i],signal:sig[i],histogram:line[i]-sig[i]};
+  }
+
+  function macdHistogramSeries(closes, fast=12, slow=26, signal=9) {
+    const f=emaSeries(closes,fast), s=emaSeries(closes,slow);
+    const line=f.map((v,i)=>v-s[i]);
+    const sig=emaSeries(line,signal);
+    return line.map((v,i)=> i>=slow-1 ? v-sig[i] : null);
+  }
+
+  function rciWindow(values) {
+    const n=values.length;
+    if (n<2) return null;
+    const timeRanks=Array.from({length:n},(_,i)=>i+1);
+    const idx=Array.from({length:n},(_,i)=>i).sort((a,b)=> values[a]===values[b] ? a-b : values[a]-values[b]);
+    const priceRanks=Array(n).fill(0);
+    idx.forEach((j,rank)=> priceRanks[j]=rank+1);
+    let sumD2=0;
+    for(let i=0;i<n;i++) sumD2 += Math.pow(timeRanks[i]-priceRanks[i],2);
+    return (1-(6*sumD2)/(n*(n*n-1)))*100;
+  }
+
+  function rci(closes, period) {
+    if(closes.length<period) return null;
+    return rciWindow(closes.slice(-period));
+  }
+
+  function rciSeries(closes, period) {
+    const out=Array(closes.length).fill(null);
+    for(let i=period-1;i<closes.length;i++){
+      out[i]=rciWindow(closes.slice(i-period+1,i+1));
+    }
+    return out;
+  }
+
+  function atr(candles, period=14) {
+    if(candles.length<period+1) return null;
+    const tr=[];
+    for(let i=1;i<candles.length;i++){
+      const c=candles[i], p=candles[i-1];
+      tr.push(Math.max(c.high-c.low,Math.abs(c.high-p.close),Math.abs(c.low-p.close)));
+    }
+    return sma(tr,period);
+  }
+
+  function recentLow(candles, period=20){ return Math.min(...candles.slice(-period).map(c=>c.low)); }
+  function recentHigh(candles, period=20){ return Math.max(...candles.slice(-period).map(c=>c.high)); }
+  function avgVolume(candles, period=20){ return sma(candles.map(c=>c.volume),period); }
+
+  // ---------- Divergence ----------
+  function findPivots(candles, type, radius=3, lookback=80) {
+    const out=[];
+    const start=Math.max(radius,candles.length-lookback);
+    const end=candles.length-radius;
+    for(let i=start;i<end;i++){
+      const price=type==="low"?candles[i].low:candles[i].high;
+      let ok=true;
+      for(let j=i-radius;j<=i+radius;j++){
+        if(j===i) continue;
+        if(type==="low" && price>candles[j].low) ok=false;
+        if(type==="high" && price<candles[j].high) ok=false;
+      }
+      if(ok) out.push({index:i,date:candles[i].date,price});
+    }
+    return out;
+  }
+
+  function latestPair(pivots,minSpacing=5,maxSpacing=45){
+    if(pivots.length<2) return null;
+    for(let si=pivots.length-1;si>=1;si--){
+      for(let fi=si-1;fi>=0;fi--){
+        const d=pivots[si].index-pivots[fi].index;
+        if(d<minSpacing) continue;
+        if(d>maxSpacing) break;
+        return [pivots[fi],pivots[si]];
+      }
+    }
+    return null;
+  }
+
+  function bullConfirm(pivot,candles,window=5){
+    const end=Math.min(candles.length-1,pivot.index+window);
+    for(let i=pivot.index+1;i<=end;i++){
+      if(candles[i].close>candles[pivot.index].high ||
+         (candles[i].close>candles[pivot.index].close && candles[i].close>candles[i].open)) return true;
+    }
+    return false;
+  }
+
+  function bearConfirm(pivot,candles,window=5){
+    const end=Math.min(candles.length-1,pivot.index+window);
+    for(let i=pivot.index+1;i<=end;i++){
+      if(candles[i].close<candles[pivot.index].low ||
+         (candles[i].close<candles[pivot.index].close && candles[i].close<candles[i].open)) return true;
+    }
+    return false;
+  }
+
+  function divStrength(priceChange, oscStrengths, count, pivotIndex, candleCount, confirmed){
+    const priceComp=Math.min(Math.abs(priceChange)/0.08,1)*25;
+    const avg=oscStrengths.length?oscStrengths.reduce((a,b)=>a+b,0)/oscStrengths.length:0;
+    const oscComp=Math.min(avg/0.25,1)*25;
+    const confComp=Math.min(count/3,1)*30;
+    const age=Math.max(0,candleCount-1-pivotIndex);
+    const recency=Math.max(0,1-age/80)*10;
+    return round1(Math.min(100,priceComp+oscComp+confComp+recency+(confirmed?10:0)));
+  }
+
+  function detectDivergences(candles){
+    if(candles.length<60) return [];
+    const closes=candles.map(c=>c.close);
+    const oscillators=[
+      ["RCI9",rciSeries(closes,9),200],
+      ["RCI26",rciSeries(closes,26),200],
+      ["MACD Hist",macdHistogramSeries(closes),5]
+    ];
+    const signals=[];
+
+    const evaluate=(type,pair)=>{
+      if(!pair) return;
+      const [a,b]=pair;
+      const pc=(b.price-a.price)/Math.max(Math.abs(a.price),0.01);
+
+      let regularPrice,hiddenPrice,regDir,hidDir;
+      if(type==="low"){
+        regularPrice=pc<-0.002; hiddenPrice=pc>0.002;
+        regDir="bullish"; hidDir="bullish";
+      } else {
+        regularPrice=pc>0.002; hiddenPrice=pc<-0.002;
+        regDir="bearish"; hidDir="bearish";
+      }
+
+      let reg=[],hid=[],regS=[],hidS=[];
+      oscillators.forEach(([name,series,scale])=>{
+        const x=series[a.index],y=series[b.index];
+        if(x==null||y==null) return;
+        const d=(y-x)/scale;
+        if(type==="low"){
+          if(d>0.02){reg.push(name);regS.push(Math.abs(d));}
+          if(d<-0.02){hid.push(name);hidS.push(Math.abs(d));}
+        }else{
+          if(d<-0.02){reg.push(name);regS.push(Math.abs(d));}
+          if(d>0.02){hid.push(name);hidS.push(Math.abs(d));}
+        }
+      });
+
+      const push=(kind,dir,osc,strengths)=>{
+        if(!osc.length) return;
+        const confirmed=dir==="bullish"?bullConfirm(b,candles):bearConfirm(b,candles);
+        const strength=divStrength(pc,strengths,osc.length,b.index,candles.length,confirmed);
+        signals.push({
+          direction:dir,kind,strength,confirmed,oscillators:osc,
+          firstPivot:a,secondPivot:b,
+          reason:`${kind==="regular"?"Regular":"Hidden"} ${dir==="bullish"?"強気":"弱気"} / 価格 ${pct(pc*100)} / ${osc.join(", ")} / ${confirmed?"確認済み":"未確認"}`
+        });
+      };
+
+      if(regularPrice) push("regular",regDir,reg,regS);
+      if(hiddenPrice) push("hidden",hidDir,hid,hidS);
+    };
+
+    evaluate("low",latestPair(findPivots(candles,"low")));
+    evaluate("high",latestPair(findPivots(candles,"high")));
+    return signals.sort((a,b)=> (b.confirmed-a.confirmed)||(b.strength-a.strength));
+  }
+
+  // ---------- TA Engine ----------
+  function evaluateTA(symbol,candles){
+    if(candles.length<220) throw new Error("TA判定に必要な日足が不足しています。");
+    const latest=candles[candles.length-1], closes=candles.map(c=>c.close);
+    const ma20=sma(closes,20),ma50=sma(closes,50),ma200=sma(closes,200);
+    const r9=rci(closes,9),r26=rci(closes,26),m=macd(closes);
+    const av=avgVolume(candles,20),a14=atr(candles,14),lo=recentLow(candles,20),hi=recentHigh(candles,20);
+    const parts=[];
+
+    let tr=0,trr=[];
+    if(latest.close>ma200){tr+=.40;trr.push("株価 > 200日線");} else trr.push("株価 < 200日線");
+    if(ma20>ma50){tr+=.35;trr.push("20日線 > 50日線");} else trr.push("20日線 ≤ 50日線");
+    if(ma50>ma200){tr+=.25;trr.push("50日線 > 200日線");} else trr.push("50日線 ≤ 200日線");
+    parts.push({name:"トレンド",score:tr*30,max:30,reason:trr.join(" / ")});
+
+    let mo=0,mor=[];
+    if(m.histogram>0){mo+=.45;mor.push("MACDヒストグラム > 0");} else mor.push("MACDヒストグラム < 0");
+    if(r9>-80&&r9<60){mo+=.30;mor.push(`RCI9 ${r9.toFixed(1)}：反転余地`);}
+    else if(r9>=60){mo+=.10;mor.push(`RCI9 ${r9.toFixed(1)}：過熱気味`);}
+    else mor.push(`RCI9 ${r9.toFixed(1)}：弱い`);
+    if(r26>-20){mo+=.25;mor.push(`RCI26 ${r26.toFixed(1)}：中期良好`);} else mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);
+    parts.push({name:"モメンタム",score:mo*30,max:30,reason:mor.join(" / ")});
+
+    const vr=latest.volume/Math.max(av,1);
+    let vo=0,vor="";
+    if(vr>=1.5&&latest.close>latest.open){vo=1;vor=`出来高20日平均の${vr.toFixed(2)}倍 + 陽線`;}
+    else if(vr>=1){vo=.55;vor=`出来高20日平均の${vr.toFixed(2)}倍`;}
+    else {vo=.2;vor=`出来高20日平均の${vr.toFixed(2)}倍で低調`;}
+    parts.push({name:"出来高",score:vo*20,max:20,reason:vor});
+
+    const range=Math.max(hi-lo,.01),pos=(latest.close-lo)/range,dh=(hi-latest.close)/Math.max(latest.close,.01);
+    let st=0,str=[];
+    if(latest.close>ma20){st+=.4;str.push("株価 > 20日線");}
+    if(pos>=.65){st+=.35;str.push("直近20日の高値圏");}
+    else if(pos>=.35){st+=.20;str.push("直近20日の中段");}
+    else str.push("直近20日の安値圏");
+    if(dh>=.03){st+=.25;str.push("直近高値まで余地あり");} else str.push("直近高値が近い");
+    parts.push({name:"価格構造",score:st*20,max:20,reason:str.join(" / ")});
+
+    const divergences=detectDivergences(candles);
+    const best=divergences.slice().sort((a,b)=>b.strength-a.strength)[0];
+    let divAdj=0;
+    if(best){
+      const mag=Math.min(best.strength/100*12,12);
+      divAdj=best.direction==="bullish"?mag:-mag;
+    }
+
+    const base=parts.reduce((s,p)=>s+p.score,0);
+    const score=round1(clamp(base+divAdj,0,100));
+    const label=score>=80?"強い買い":score>=60?"買い候補":score>=40?"様子見":"売り優勢";
+
+    const entry1=Math.max(ma20,latest.close-.75*a14);
+    const entry2=Math.max(lo,latest.close-1.5*a14);
+    const stop=Math.max(Math.min(lo-.25*a14,latest.close-2*a14),.01);
+    const risk=Math.max(entry1-stop,a14);
+    const levels={
+      entry1:round2(entry1),entry2:round2(entry2),stopLoss:round2(stop),
+      takeProfit1:round2(entry1+2*risk),takeProfit2:round2(entry1+3*risk)
+    };
+
+    return {symbol,score,label,parts,divergences,divAdj:round1(divAdj),levels,latest,ma20,ma50,ma200};
+  }
+
+  // ---------- Data ----------
+  async function fetchCandles(symbol){
+    if(!store.apiKey) throw new Error("先にAPIキーを設定してください。");
+    const url=new URL("https://api.twelvedata.com/time_series");
+    url.searchParams.set("symbol",symbol);
+    url.searchParams.set("interval","1day");
+    url.searchParams.set("outputsize","260");
+    url.searchParams.set("order","ASC");
+    url.searchParams.set("timezone","America/New_York");
+    url.searchParams.set("apikey",store.apiKey);
+
+    const res=await fetch(url.toString(),{cache:"no-store"});
+    if(!res.ok) throw new Error(`市場データ取得エラー (${res.status})`);
+    const data=await res.json();
+    if(data.status==="error") throw new Error(data.message||"Twelve Data API error");
+    if(!Array.isArray(data.values)) throw new Error("市場データの形式を読み取れませんでした。");
+
+    const candles=data.values.map(v=>({
+      date:String(v.datetime).slice(0,10),
+      open:Number(v.open),high:Number(v.high),low:Number(v.low),close:Number(v.close),volume:Number(v.volume||0)
+    })).filter(c=>[c.open,c.high,c.low,c.close].every(Number.isFinite))
+      .sort((a,b)=>a.date.localeCompare(b.date));
+
+    if(candles.length<220) throw new Error(`日足が不足しています（${candles.length}本）。`);
+    return candles;
+  }
+
+  async function refreshSymbol(symbol, silent=false){
+    if(refreshing.has(symbol)) return;
+    refreshing.add(symbol); renderWatchlist();
+    try{
+      const candles=await fetchCandles(symbol);
+      const result=evaluateTA(symbol,candles);
+      cache[symbol]={candles,result,updatedAt:Date.now()};
+      store.cache=cache;
+      if(!silent) toast(`${symbol}を更新しました`);
+      if(currentSymbol===symbol) renderDetail(symbol);
+    }catch(e){
+      if(!silent) toast(e.message || String(e));
+      throw e;
+    }finally{
+      refreshing.delete(symbol); renderWatchlist();
+    }
+  }
+
+  async function refreshAll(){
+    if(!store.apiKey){ openSettings(); return; }
+    for(const item of watchlist){
+      try{ await refreshSymbol(item.symbol,true); }
+      catch(e){ toast(`${item.symbol}: ${e.message}`); }
+    }
+    toast("ウォッチリストを更新しました");
+  }
+
+  // ---------- Rendering ----------
+  function renderWatchlist(){
+    $("apiNotice").classList.toggle("hidden",!!store.apiKey);
+    $("emptyState").classList.toggle("hidden",watchlist.length>0);
+    $("watchlist").innerHTML=watchlist.map(item=>{
+      const c=cache[item.symbol], r=c?.result;
+      const loading=refreshing.has(item.symbol);
+      return `<div class="stock" data-symbol="${esc(item.symbol)}">
+        <div class="grow">
+          <div class="ticker">${esc(item.symbol)}</div>
+          <div class="name">${esc(item.name||item.symbol)}</div>
+        </div>
+        ${loading ? `<div class="spinner"></div>` :
+          r ? `<div><div class="score">${Math.round(r.score)}</div><div class="label">${esc(r.label)}</div></div>` :
+          `<div class="label">未判定</div>`}
+      </div>`;
+    }).join("");
+    document.querySelectorAll(".stock").forEach(el=>{
+      el.addEventListener("click",()=>showDetail(el.dataset.symbol));
+    });
+  }
+
+  function showDetail(symbol){
+    currentSymbol=symbol;
+    $("listView").classList.add("hidden");
+    $("listHeader").classList.add("hidden");
+    $("detailView").classList.remove("hidden");
+    $("detailHeader").classList.remove("hidden");
+    renderDetail(symbol);
+    window.scrollTo({top:0,behavior:"instant"});
+  }
+
+  function showList(){
+    currentSymbol=null;
+    $("detailView").classList.add("hidden");
+    $("detailHeader").classList.add("hidden");
+    $("listView").classList.remove("hidden");
+    $("listHeader").classList.remove("hidden");
+    renderWatchlist();
+    window.scrollTo({top:0,behavior:"instant"});
+  }
+
+  function renderDetail(symbol){
+    const item=watchlist.find(x=>x.symbol===symbol)||{symbol,name:symbol};
+    const data=cache[symbol];
+    $("detailHeaderTitle").textContent=symbol;
+    $("detailSymbol").textContent=symbol;
+    $("detailName").textContent=item.name||symbol;
+
+    if(!data){
+      $("detailPrice").textContent="未取得";
+      $("detailDate").textContent="右上の↻でデータを取得してください";
+      $("scoreCard").innerHTML=`<h3>TA総合判定</h3><div class="muted small">まだデータがありません。</div>`;
+      $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
+      $("levelsCard").innerHTML=`<h3>自動売買レベル</h3><div class="muted small">未判定</div>`;
+      $("reasonsCard").innerHTML=`<h3>判定理由</h3><div class="muted small">未判定</div>`;
+      clearChart();
+      return;
+    }
+
+    const {candles,result:r}=data;
+    $("detailPrice").textContent=money(r.latest.close);
+    $("detailDate").textContent=`${r.latest.date} 日足終値`;
+    $("scoreCard").innerHTML=`
+      <h3>TA総合判定</h3>
+      <div class="hero-score">
+        <div class="num">${Math.round(r.score)}</div><div class="of">/100</div>
+        <div class="pill">${esc(r.label)}</div>
+      </div>
+      <div class="bar"><span style="width:${clamp(r.score,0,100)}%"></span></div>
+      ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
+      <div class="metric-reason" style="margin-top:10px;">ダイバージェンスはベーススコアと二重計上しないよう最大±12点の独立補正。</div>`;
+
+    $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3>` +
+      (r.divergences.length ? r.divergences.map(d=>`
+        <div class="divsig">
+          <div class="divtitle">
+            <span>${d.kind==="regular"?"Regular":"Hidden"} ${d.direction==="bullish"?"強気":"弱気"}</span>
+            <span class="tag">${d.confirmed?"確認済み":"未確認"}</span>
+            <span>${Math.round(d.strength)}/100</span>
+          </div>
+          <div class="metric-reason">${esc(d.oscillators.join(" + "))}</div>
+          <div class="bar"><span style="width:${d.strength}%"></span></div>
+          <div class="metric-reason">${esc(d.reason)}</div>
+        </div>`).join("") :
+        `<div class="muted small">直近80営業日に有効なダイバージェンスは検出されていません。</div>`);
+
+    $("levelsCard").innerHTML=`<h3>自動売買レベル</h3>
+      ${[
+        ["指値①",r.levels.entry1],
+        ["指値②",r.levels.entry2],
+        ["利確①",r.levels.takeProfit1],
+        ["利確②",r.levels.takeProfit2],
+        ["損切り",r.levels.stopLoss]
+      ].map(([k,v])=>`<div class="level"><span>${k}</span><strong>${money(v)}</strong></div>`).join("")}`;
+
+    $("reasonsCard").innerHTML=`<h3>判定理由</h3>`+
+      r.parts.map(p=>`<div class="metric">
+        <div class="metric-head"><span>${esc(p.name)}</span><span style="margin-left:auto">${p.score.toFixed(1)} / ${p.max}</span></div>
+        <div class="bar"><span style="width:${clamp(p.score/p.max*100,0,100)}%"></span></div>
+        <div class="metric-reason">${esc(p.reason)}</div>
+      </div>`).join("");
+
+    drawChart(candles,r);
+  }
+
+  function clearChart(){
+    const c=$("chart"),ctx=c.getContext("2d");
+    ctx.clearRect(0,0,c.width,c.height);
+    ctx.fillStyle="#11131a";ctx.fillRect(0,0,c.width,c.height);
+    ctx.fillStyle="#9da3ae";ctx.font="26px -apple-system";
+    ctx.textAlign="center";ctx.fillText("データ未取得",c.width/2,c.height/2);
+  }
+
+  function drawChart(all,r){
+    const canvas=$("chart"),ctx=canvas.getContext("2d");
+    const dpr=Math.min(window.devicePixelRatio||1,3);
+    const cssW=canvas.clientWidth||360, cssH=360;
+    canvas.width=Math.round(cssW*dpr);canvas.height=Math.round(cssH*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    const W=cssW,H=cssH;
+    ctx.fillStyle="#11131a";ctx.fillRect(0,0,W,H);
+
+    const visibleCount=90, visible=all.slice(-visibleCount), offset=all.length-visible.length;
+    const closes=all.map(c=>c.close);
+    const ma20=smaSeries(closes,20).slice(offset),ma50=smaSeries(closes,50).slice(offset),ma200=smaSeries(closes,200).slice(offset);
+
+    const pad={l:8,r:58,t:12,b:18}, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
+    let minP=Math.min(...visible.map(c=>c.low),r.levels.entry1,r.levels.entry2,r.levels.stopLoss);
+    let maxP=Math.max(...visible.map(c=>c.high),r.levels.takeProfit1,r.levels.takeProfit2);
+    const sp=Math.max(maxP-minP,.01);minP-=sp*.04;maxP+=sp*.04;
+    const y=p=>pad.t+ph*(1-(p-minP)/(maxP-minP));
+    const x=i=>pad.l+(visible.length===1?pw/2:i*pw/(visible.length-1));
+    const xAbs=i=>{const vi=i-offset;return vi>=0&&vi<visible.length?x(vi):null;};
+
+    ctx.font="10px -apple-system";ctx.textAlign="left";ctx.textBaseline="middle";
+    for(let s=0;s<=4;s++){
+      const yy=pad.t+ph*s/4;
+      ctx.strokeStyle="rgba(157,163,174,.14)";ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(pad.l+pw,yy);ctx.stroke();
+      const p=maxP-(maxP-minP)*s/4;
+      ctx.fillStyle="#9da3ae";ctx.fillText(p.toFixed(2),pad.l+pw+6,yy);
+    }
+
+    const bw=Math.max(2,Math.min(5,pw/visible.length*.62));
+    visible.forEach((c,i)=>{
+      const xx=x(i),up=c.close>=c.open,color=up?"#43d17b":"#ff5f67";
+      ctx.strokeStyle=color;ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(xx,y(c.high));ctx.lineTo(xx,y(c.low));ctx.stroke();
+      ctx.fillStyle=color;
+      const oy=y(c.open),cy=y(c.close),top=Math.min(oy,cy),h=Math.max(Math.abs(cy-oy),1.5);
+      ctx.fillRect(xx-bw/2,top,bw,h);
+    });
+
+    function line(series,color,width){
+      ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();let started=false;
+      series.forEach((v,i)=>{
+        if(v==null)return;const xx=x(i),yy=y(v);
+        if(!started){ctx.moveTo(xx,yy);started=true;}else ctx.lineTo(xx,yy);
+      });
+      ctx.stroke();
+    }
+    line(ma20,"#f2d64b",1.4);line(ma50,"#f29b4b",1.4);line(ma200,"#5b8cff",1.6);
+
+    function level(p,label,color,dash){
+      const yy=y(p);ctx.save();ctx.setLineDash(dash);ctx.strokeStyle=color;ctx.lineWidth=1.1;
+      ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(pad.l+pw,yy);ctx.stroke();ctx.restore();
+      ctx.fillStyle=color;ctx.font="9px -apple-system";ctx.fillText(`${label} ${p.toFixed(2)}`,pad.l+pw+4,yy);
+    }
+    level(r.levels.takeProfit2,"TP2","#43d17b",[5,3]);
+    level(r.levels.takeProfit1,"TP1","#43d17b",[3,3]);
+    level(r.levels.entry1,"E1","#4ad8ff",[5,3]);
+    level(r.levels.entry2,"E2","#4ad8ff",[3,3]);
+    level(r.levels.stopLoss,"SL","#ff5f67",[5,3]);
+
+    r.divergences.slice(0,2).forEach(d=>{
+      const x1=xAbs(d.firstPivot.index),x2=xAbs(d.secondPivot.index);if(x1==null||x2==null)return;
+      const color=d.direction==="bullish"?"#68e3c1":"#ff75b5";
+      ctx.save();ctx.strokeStyle=color;ctx.lineWidth=d.confirmed?2.4:1.5;ctx.setLineDash(d.confirmed?[]:[5,3]);
+      ctx.beginPath();ctx.moveTo(x1,y(d.firstPivot.price));ctx.lineTo(x2,y(d.secondPivot.price));ctx.stroke();ctx.restore();
+      ctx.fillStyle=color;ctx.font="bold 9px -apple-system";ctx.textAlign="center";
+      ctx.fillText(`${d.kind==="regular"?"DIV":"H-DIV"} ${Math.round(d.strength)}`,x2,y(d.secondPivot.price)+(d.direction==="bullish"?12:-12));
+      ctx.textAlign="left";
+    });
+  }
+
+  // ---------- Settings / events ----------
+  function openSettings(){
+    $("apiKeyInput").value=store.apiKey;
+    $("settingsModal").classList.remove("hidden");
+  }
+  function closeSettings(){ $("settingsModal").classList.add("hidden"); }
+
+  $("settingsBtn").addEventListener("click",openSettings);
+  $("closeSettingsBtn").addEventListener("click",closeSettings);
+  $("saveSettingsBtn").addEventListener("click",()=>{
+    store.apiKey=$("apiKeyInput").value.trim();
+    closeSettings();renderWatchlist();toast("APIキーを保存しました");
+  });
+  $("settingsModal").addEventListener("click",e=>{if(e.target===$("settingsModal"))closeSettings();});
+
+  $("addBtn").addEventListener("click",()=>{
+    const s=$("symbolInput").value.trim().toUpperCase();
+    if(!s)return;
+    if(watchlist.some(x=>x.symbol===s)){toast("すでに登録されています");return;}
+    watchlist.push({symbol:s,name:s});store.watchlist=watchlist;$("symbolInput").value="";renderWatchlist();
+    if(store.apiKey) refreshSymbol(s).catch(()=>{});
+  });
+  $("symbolInput").addEventListener("keydown",e=>{if(e.key==="Enter")$("addBtn").click();});
+  $("refreshAllBtn").addEventListener("click",refreshAll);
+  $("backBtn").addEventListener("click",showList);
+  $("refreshOneBtn").addEventListener("click",()=>{
+    if(!currentSymbol)return;
+    refreshSymbol(currentSymbol).catch(()=>{});
+  });
+  $("deleteBtn").addEventListener("click",()=>{
+    if(!currentSymbol)return;
+    const s=currentSymbol;
+    if(!confirm(`${s}をウォッチリストから削除しますか？`))return;
+    watchlist=watchlist.filter(x=>x.symbol!==s);store.watchlist=watchlist;
+    delete cache[s];store.cache=cache;showList();toast(`${s}を削除しました`);
+  });
+
+  if("serviceWorker" in navigator){
+    window.addEventListener("load",()=>navigator.serviceWorker.register("./service-worker.js").catch(()=>{}));
+  }
+
+  renderWatchlist();
+})();
+</script>
+</body>
+</html>
