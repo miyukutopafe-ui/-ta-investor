@@ -204,6 +204,7 @@
         <canvas id="chart" width="720" height="720"></canvas>
         <div class="legend">
           MA20＝黄 / MA50＝橙 / MA200＝青<br>
+          PB＝押し目候補 / RC＝反転確認 / BO＝ブレイク候補<br>
           DIV＝Regular divergence / H-DIV＝Hidden divergence<br>
           実線＝確認済み / 破線＝未確認
         </div>
@@ -504,6 +505,8 @@
     const ma20=sma(closes,20),ma50=sma(closes,50),ma200=sma(closes,200);
     const r9=rci(closes,9),r26=rci(closes,26),m=macd(closes);
     const av=avgVolume(candles,20),a14=atr(candles,14),lo=recentLow(candles,20),hi=recentHigh(candles,20);
+    const prior20=candles.slice(-21,-1);
+    const priorHigh20=prior20.length ? Math.max(...prior20.map(c=>c.high)) : hi;
     const parts=[];
 
     let tr=0,trr=[];
@@ -516,23 +519,14 @@
     if(m.histogram>0){mo+=.45;mor.push("MACDヒストグラム > 0");}
     else mor.push("MACDヒストグラム < 0");
 
-    if(r9>=80){
-      mo+=.08; mor.push(`RCI9 ${r9.toFixed(1)}：買われ過ぎ圏`);
-    } else if(r9>=40){
-      mo+=.28; mor.push(`RCI9 ${r9.toFixed(1)}：強い`);
-    } else if(r9>-80){
-      mo+=.22; mor.push(`RCI9 ${r9.toFixed(1)}：中立〜改善余地`);
-    } else {
-      mo+=.08; mor.push(`RCI9 ${r9.toFixed(1)}：売られ過ぎ圏`);
-    }
+    if(r9>=80){mo+=.08;mor.push(`RCI9 ${r9.toFixed(1)}：買われ過ぎ圏`);}
+    else if(r9>=40){mo+=.28;mor.push(`RCI9 ${r9.toFixed(1)}：強い`);}
+    else if(r9>-80){mo+=.22;mor.push(`RCI9 ${r9.toFixed(1)}：中立〜改善余地`);}
+    else {mo+=.08;mor.push(`RCI9 ${r9.toFixed(1)}：売られ過ぎ圏`);}
 
-    if(r26>=80){
-      mo+=.08; mor.push(`RCI26 ${r26.toFixed(1)}：中期過熱`);
-    } else if(r26>-20){
-      mo+=.25; mor.push(`RCI26 ${r26.toFixed(1)}：中期良好`);
-    } else {
-      mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);
-    }
+    if(r26>=80){mo+=.08;mor.push(`RCI26 ${r26.toFixed(1)}：中期過熱`);}
+    else if(r26>-20){mo+=.25;mor.push(`RCI26 ${r26.toFixed(1)}：中期良好`);}
+    else {mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);}
     parts.push({name:"モメンタム",score:Math.min(mo,1)*30,max:30,reason:mor.join(" / ")});
 
     const vr=latest.volume/Math.max(av,1);
@@ -564,16 +558,41 @@
     const score=round1(clamp(base+divAdj,0,100));
     const strengthLabel=score>=80?"非常に強い":score>=65?"強い":score>=50?"中立":score>=35?"弱い":"非常に弱い";
 
-    const entry1=Math.max(ma20,latest.close-.75*a14);
-    const entry2=Math.max(lo,latest.close-1.5*a14);
-    const stop=Math.max(Math.min(lo-.25*a14,latest.close-2*a14),.01);
-    const risk=Math.max(entry1-stop,a14);
-    const levels={
-      entry1:round2(entry1),entry2:round2(entry2),stopLoss:round2(stop),
-      takeProfit1:round2(entry1+2*risk),takeProfit2:round2(entry1+3*risk)
+    // v0.5: 買い候補と上方向の確認ラインを分離
+    let pullbackEntry;
+    if(latest.close>=ma20){
+      pullbackEntry=Math.max(ma20,latest.close-0.75*a14);
+    }else{
+      pullbackEntry=Math.max(lo,latest.close-1.50*a14);
+    }
+    pullbackEntry=Math.min(pullbackEntry,latest.close);
+
+    // MA20が現在値より上なら「指値」ではなく反転確認ライン
+    const reclaimLevel=ma20>latest.close ? ma20 : null;
+
+    // 直近高値または0.5ATR上をブレイク候補にする
+    const breakoutLevel=Math.max(priorHigh20,latest.close+0.50*a14);
+
+    // 損切り
+    let stopLoss=Math.min(lo-0.25*a14,latest.close-2.0*a14);
+    stopLoss=Math.max(stopLoss,0.01);
+
+    // 利確は押し目候補からの2R/3R
+    const riskFromPullback=Math.max(pullbackEntry-stopLoss,a14*0.50);
+    const takeProfit1=pullbackEntry+2.0*riskFromPullback;
+    const takeProfit2=pullbackEntry+3.0*riskFromPullback;
+
+    const tradePlan={
+      pullbackEntry:round2(pullbackEntry),
+      reclaimLevel:reclaimLevel==null?null:round2(reclaimLevel),
+      breakoutLevel:round2(breakoutLevel),
+      stopLoss:round2(stopLoss),
+      takeProfit1:round2(takeProfit1),
+      takeProfit2:round2(takeProfit2),
+      riskPerShare:round2(riskFromPullback)
     };
 
-    const distanceToEntry1=(latest.close-entry1)/latest.close;
+    const distanceToPullback=(latest.close-pullbackEntry)/latest.close;
     const distanceToHigh=(hi-latest.close)/latest.close;
     const aboveMA20=latest.close>=ma20;
     const overheated=(r9>=80 || r26>=80);
@@ -583,63 +602,53 @@
 
     let timingScore=50;
     const timingReasons=[];
-
     if(score>=65){timingScore+=10;timingReasons.push("TA強度が高い");}
     if(score<50){timingScore-=15;timingReasons.push("TA強度が弱い");}
 
-    if(Math.abs(distanceToEntry1)<=0.025){
-      timingScore+=18; timingReasons.push("指値①に近い");
-    } else if(distanceToEntry1>0.08){
-      timingScore-=12; timingReasons.push("指値①から上に離れている");
+    if(Math.abs(distanceToPullback)<=0.025){
+      timingScore+=18;timingReasons.push("押し目候補に近い");
+    }else if(distanceToPullback>0.08){
+      timingScore-=12;timingReasons.push("押し目候補から上に離れている");
     }
 
-    if(overheated){
-      timingScore-=15; timingReasons.push("RCI過熱");
-    } else if(oversold && score>=50){
-      timingScore+=10; timingReasons.push("RCI売られ過ぎ");
-    }
+    if(overheated){timingScore-=15;timingReasons.push("RCI過熱");}
+    else if(oversold&&score>=50){timingScore+=10;timingReasons.push("RCI売られ過ぎ");}
 
-    if(vr>=1.5 && latest.close>latest.open){
-      timingScore+=8; timingReasons.push("出来高を伴う陽線");
+    if(vr>=1.5&&latest.close>latest.open){timingScore+=8;timingReasons.push("出来高を伴う陽線");}
+    if(strongBullDiv){timingScore+=15;timingReasons.push("確認済み強気ダイバージェンス");}
+    if(strongBearDiv){timingScore-=20;timingReasons.push("確認済み弱気ダイバージェンス");}
+    if(distanceToHigh>=0&&distanceToHigh<=0.02&&!strongBullDiv){
+      timingScore-=8;timingReasons.push("直近高値が近い");
     }
-
-    if(strongBullDiv){
-      timingScore+=15; timingReasons.push("確認済み強気ダイバージェンス");
-    }
-    if(strongBearDiv){
-      timingScore-=20; timingReasons.push("確認済み弱気ダイバージェンス");
-    }
-
-    if(distanceToHigh>=0 && distanceToHigh<=0.02 && !strongBullDiv){
-      timingScore-=8; timingReasons.push("直近高値が近い");
-    }
-
     timingScore=round1(clamp(timingScore,0,100));
 
     let action,actionDetail;
-    if(strongBearDiv || (overheated && score>=65)){
+    if(strongBearDiv||(overheated&&score>=65)){
       action="利確警戒";
       actionDetail="強さはあるが、過熱または弱気シグナルを警戒";
-    } else if(score>=65 && timingScore>=70 && !overheated){
+    }else if(score>=65&&timingScore>=70&&!overheated){
       action="エントリー候補";
       actionDetail="強いトレンドで、価格位置も比較的良好";
-    } else if(score>=60 && aboveMA20 && distanceToEntry1>0.025){
+    }else if(score>=60&&aboveMA20&&distanceToPullback>0.025){
       action="押し目待ち";
-      actionDetail="銘柄は強いが、指値①付近までの押しを待ちたい";
-    } else if(score>=50 && !aboveMA20){
-      action="ブレイク待ち";
-      actionDetail="20日線回復や直近高値突破などの確認待ち";
-    } else if(score<50){
+      actionDetail="銘柄は強いが、押し目候補まで引きつけたい";
+    }else if(score>=50&&!aboveMA20){
+      action="反転確認待ち";
+      actionDetail="MA20回復または直近高値突破を確認してから";
+    }else if(score<50){
       action="見送り";
-      actionDetail="現時点ではテクニカル優位性が弱い";
-    } else {
+      actionDetail=strongBullDiv
+        ?"強気ダイバージェンスはあるが、トレンド回復の確認が必要"
+        :"現時点ではテクニカル優位性が弱い";
+    }else{
       action="様子見";
       actionDetail="方向感または価格位置の改善待ち";
     }
 
     return {
-      symbol,score,strengthLabel,parts,divergences,divAdj:round1(divAdj),levels,latest,
-      ma20,ma50,ma200,r9,r26,volumeRatio:vr,timingScore,action,actionDetail,timingReasons
+      symbol,score,strengthLabel,parts,divergences,divAdj:round1(divAdj),
+      tradePlan,latest,ma20,ma50,ma200,r9,r26,volumeRatio:vr,
+      timingScore,action,actionDetail,timingReasons
     };
   }
 
@@ -758,7 +767,7 @@
       $("detailDate").textContent="右上の↻でデータを取得してください";
       $("scoreCard").innerHTML=`<h3>TA強度</h3><div class="muted small">まだデータがありません。</div>`;
       $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
-      $("levelsCard").innerHTML=`<h3>自動売買レベル</h3><div class="muted small">未判定</div>`;
+      $("levelsCard").innerHTML=`<h3>売買プラン</h3><div class="muted small">未判定</div>`;
       $("reasonsCard").innerHTML=`<h3>判定理由</h3><div class="muted small">未判定</div>`;
       clearChart();
       return;
@@ -821,14 +830,15 @@
         </div>`).join("") :
         `<div class="muted small">直近80営業日に有効なダイバージェンスは検出されていません。</div>`);
 
-    $("levelsCard").innerHTML=`<h3>自動売買レベル</h3>
-      ${[
-        ["指値①",r.levels.entry1],
-        ["指値②",r.levels.entry2],
-        ["利確①",r.levels.takeProfit1],
-        ["利確②",r.levels.takeProfit2],
-        ["損切り",r.levels.stopLoss]
-      ].map(([k,v])=>`<div class="level"><span>${k}</span><strong>${money(v)}</strong></div>`).join("")}`;
+    const tpBasisNote=`TP1/TP2は「押し目候補」からの2R/3R。反転確認やブレイクで約定した場合は、実際の約定価格から再計算します。`;
+    $("levelsCard").innerHTML=`<h3>売買プラン</h3>
+      <div class="level"><span>押し目候補</span><strong>${money(r.tradePlan.pullbackEntry)}</strong></div>
+      <div class="level"><span>反転確認</span><strong>${r.tradePlan.reclaimLevel==null?"—":money(r.tradePlan.reclaimLevel)}</strong></div>
+      <div class="level"><span>ブレイク候補</span><strong>${money(r.tradePlan.breakoutLevel)}</strong></div>
+      <div class="level"><span>損切り</span><strong>${money(r.tradePlan.stopLoss)}</strong></div>
+      <div class="level"><span>利確①（2R）</span><strong>${money(r.tradePlan.takeProfit1)}</strong></div>
+      <div class="level"><span>利確②（3R）</span><strong>${money(r.tradePlan.takeProfit2)}</strong></div>
+      <div class="metric-reason" style="margin-top:10px;">${tpBasisNote}</div>`;
 
     $("reasonsCard").innerHTML=`<h3>判定理由</h3>`+
       r.parts.map(p=>`<div class="metric">
@@ -863,9 +873,18 @@
 
     const pad={l:8,r:58,t:12,b:18}, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
     let minP,maxP;
+    const planValues=[
+      r.tradePlan.pullbackEntry,
+      r.tradePlan.reclaimLevel,
+      r.tradePlan.breakoutLevel,
+      r.tradePlan.stopLoss,
+      r.tradePlan.takeProfit1,
+      r.tradePlan.takeProfit2
+    ].filter(v=>v!=null&&Number.isFinite(v));
+
     if(chartMode==="all"){
-      minP=Math.min(...visible.map(c=>c.low),r.levels.entry1,r.levels.entry2,r.levels.stopLoss);
-      maxP=Math.max(...visible.map(c=>c.high),r.levels.takeProfit1,r.levels.takeProfit2);
+      minP=Math.min(...visible.map(c=>c.low),...planValues);
+      maxP=Math.max(...visible.map(c=>c.high),...planValues);
     }else{
       const focusValues=[
         ...visible.map(c=>c.low),...visible.map(c=>c.high),
@@ -873,9 +892,8 @@
       ];
       minP=Math.min(...focusValues);
       maxP=Math.max(...focusValues);
-      const nearby=[r.levels.entry1,r.levels.entry2,r.levels.stopLoss,r.levels.takeProfit1,r.levels.takeProfit2]
-        .filter(v=>Math.abs(v-r.latest.close)/r.latest.close<=0.18);
-      if(nearby.length){ minP=Math.min(minP,...nearby); maxP=Math.max(maxP,...nearby); }
+      const nearby=planValues.filter(v=>Math.abs(v-r.latest.close)/r.latest.close<=0.18);
+      if(nearby.length){minP=Math.min(minP,...nearby);maxP=Math.max(maxP,...nearby);}
     }
     const sp=Math.max(maxP-minP,.01);minP-=sp*.05;maxP+=sp*.05;
     const y=p=>pad.t+ph*(1-(p-minP)/(maxP-minP));
@@ -922,11 +940,12 @@
         ctx.fillText(`${p>maxP?"↑":"↓"} ${label} ${p.toFixed(2)}`,pad.l+pw+4,yy);
       }
     }
-    level(r.levels.takeProfit2,"TP2","#43d17b",[5,3]);
-    level(r.levels.takeProfit1,"TP1","#43d17b",[3,3]);
-    level(r.levels.entry1,"E1","#4ad8ff",[5,3]);
-    level(r.levels.entry2,"E2","#4ad8ff",[3,3]);
-    level(r.levels.stopLoss,"SL","#ff5f67",[5,3]);
+    level(r.tradePlan.takeProfit2,"TP2","#43d17b",[5,3]);
+    level(r.tradePlan.takeProfit1,"TP1","#43d17b",[3,3]);
+    level(r.tradePlan.pullbackEntry,"PB","#4ad8ff",[5,3]);
+    if(r.tradePlan.reclaimLevel!=null) level(r.tradePlan.reclaimLevel,"RC","#f2d64b",[4,3]);
+    level(r.tradePlan.breakoutLevel,"BO","#f29b4b",[4,3]);
+    level(r.tradePlan.stopLoss,"SL","#ff5f67",[5,3]);
 
     r.divergences.slice(0,2).forEach(d=>{
       const x1=xAbs(d.firstPivot.index),x2=xAbs(d.secondPivot.index);if(x1==null||x2==null)return;
