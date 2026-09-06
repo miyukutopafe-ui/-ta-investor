@@ -224,6 +224,24 @@
       background:var(--card); border:1px solid var(--line); border-radius:18px; line-height:1.7;
     }
 
+    .reorder-bar{display:flex;gap:8px;align-items:center;margin-bottom:12px;padding:10px 12px;border-radius:14px;background:rgba(74,216,255,.08);border:1px solid rgba(74,216,255,.20);color:#cdeefa;font-size:11px}
+    .reorder-controls{display:flex;gap:6px;margin-left:auto}
+    .reorder-btn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-weight:900;font-size:16px}
+    .reorder-btn:disabled{opacity:.25}
+    .range-card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:16px;margin:12px 0;box-shadow:var(--shadow)}
+    .range-card h3{margin:0 0 12px;font-size:15px}
+    .range-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .range-box{background:var(--card2);border-radius:12px;padding:11px}
+    .range-box .k{color:var(--muted);font-size:10px}
+    .range-box .v{font-size:18px;font-weight:900;margin-top:3px}
+    .range-box .sub{color:var(--muted);font-size:10px;margin-top:3px;line-height:1.35}
+    .range-track{position:relative;height:10px;background:#252a34;border-radius:999px;margin:14px 0 6px}
+    .range-fill{height:100%;border-radius:999px;background:var(--cyan)}
+    .range-dot{position:absolute;top:50%;width:18px;height:18px;border-radius:50%;background:var(--text);border:3px solid var(--bg);transform:translate(-50%,-50%);box-shadow:0 0 0 1px rgba(255,255,255,.18)}
+    .range-labels{display:flex;justify-content:space-between;color:var(--muted);font-size:9px}
+    .list-range{color:var(--muted);font-size:10px;margin-top:5px}
+    .list-range strong{color:var(--text);font-weight:800}
+    .screen-range{color:var(--muted);font-size:9px;margin-top:5px}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -235,6 +253,7 @@
 <div class="app">
   <header id="listHeader">
     <div class="title">TA Investor</div>
+    <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
   </header>
@@ -253,6 +272,7 @@
       </div>
 
       <div id="watchPanel">
+        <div id="reorderBar" class="reorder-bar hidden">並べ替え中：各銘柄の ↑ ↓ で順番を変更できます。</div>
         <div id="apiNotice" class="notice">
           最初に右上の⚙︎からTwelve DataのAPIキーを設定してください。APIキーはこのiPhone内だけに保存します。
         </div>
@@ -290,6 +310,8 @@
             <option value="div">強気DIV順</option>
             <option value="pb">PB距離が近い順</option>
             <option value="risk">損切り幅が狭い順</option>
+            <option value="52high">52週高値に近い順</option>
+            <option value="52low">52週安値に近い順</option>
           </select>
         </div>
 
@@ -330,6 +352,7 @@
         </div>
       </div>
 
+      <div class="range-card" id="range52Card"></div>
       <div class="card" id="divergenceCard"></div>
       <div class="card" id="levelsCard"></div>
       <div class="card" id="reasonsCard"></div>
@@ -389,6 +412,7 @@
   let listMode = "watch";
   let screenPreset = "all";
   let screenSort = "timing";
+  let reorderMode = false;
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -415,6 +439,38 @@
   function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
   function round1(v){ return Math.round(v*10)/10; }
   function round2(v){ return Math.round(v*100)/100; }
+
+
+  function calc52WeekRange(candles){
+    if(!Array.isArray(candles)||!candles.length) return null;
+    const targetCount=Math.min(252,candles.length);
+    const slice=candles.slice(-targetCount);
+    const high=Math.max(...slice.map(c=>c.high));
+    const low=Math.min(...slice.map(c=>c.low));
+    const current=slice[slice.length-1].close;
+    return {
+      high:round2(high),
+      low:round2(low),
+      current:round2(current),
+      fromHigh:round1((current-high)/Math.max(high,0.01)*100),
+      fromLow:round1((current-low)/Math.max(low,0.01)*100),
+      position:round1(clamp(high>low?(current-low)/(high-low)*100:50,0,100)),
+      count:targetCount,
+      full52:targetCount>=240
+    };
+  }
+
+  function moveWatchItem(symbol,direction){
+    const i=watchlist.findIndex(x=>x.symbol===symbol);
+    const ni=i+direction;
+    if(i<0||ni<0||ni>=watchlist.length) return;
+    const copy=[...watchlist];
+    const [item]=copy.splice(i,1);
+    copy.splice(ni,0,item);
+    watchlist=copy;
+    store.watchlist=watchlist;
+    renderWatchlist();
+  }
 
   // ---------- Indicators ----------
   function sma(values, period) {
@@ -906,7 +962,8 @@
         boDist:round1(boDist),
         bullDiv:round1(bullDiv),
         bearDiv:round1(bearDiv),
-        confirmedBull
+        confirmedBull,
+        range52:calc52WeekRange(c.candles)
       };
     }catch{
       return null;
@@ -953,6 +1010,8 @@
         case "div": return b.bullDiv-a.bullDiv || b.r.timingScore-a.r.timingScore;
         case "pb": return Math.abs(a.pbDist)-Math.abs(b.pbDist);
         case "risk": return a.r.tradePlan.stopDistancePct-b.r.tradePlan.stopDistancePct;
+        case "52high": return Math.abs(a.range52?.fromHigh??-999)-Math.abs(b.range52?.fromHigh??-999);
+        case "52low": return Math.abs(a.range52?.fromLow??999)-Math.abs(b.range52?.fromLow??999);
         default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
       }
     });
@@ -1025,6 +1084,7 @@
           RCI9 ${r.r9.toFixed(1)} / 出来高 ${r.volumeRatio.toFixed(2)}倍 /
           ERまで ${x.erDist>=0?"+":""}${x.erDist.toFixed(1)}%
         </div>
+        ${x.range52?`<div class="screen-range">${x.range52.full52?"52W":"履歴内"}高値から ${x.range52.fromHigh.toFixed(1)}% / 安値から +${x.range52.fromLow.toFixed(1)}%</div>`:""}
       </div>`;
     }).join("");
 
@@ -1040,6 +1100,7 @@
     $("screenPanel").classList.toggle("hidden",!screening);
     $("watchTabBtn").classList.toggle("active",!screening);
     $("screenTabBtn").classList.toggle("active",screening);
+    $("reorderBtn").classList.toggle("hidden",screening);
     if(screening) renderScreener();
     else renderWatchlist();
   }
@@ -1047,29 +1108,47 @@
   function renderWatchlist(){
     $("apiNotice").classList.toggle("hidden",!!store.apiKey);
     $("emptyState").classList.toggle("hidden",watchlist.length>0);
-    $("watchlist").innerHTML=watchlist.map(item=>{
+    $("reorderBar").classList.toggle("hidden",!reorderMode);
+    $("reorderBtn").textContent=reorderMode?"✓":"⇅";
+
+    $("watchlist").innerHTML=watchlist.map((item,index)=>{
       const c=cache[item.symbol];
       let r=c?.result;
-      if(c?.candles && (!r || r.action===undefined)){
+      if(c?.candles&&(!r||r.action===undefined)){
         try{
           r=evaluateTA(item.symbol,c.candles);
-          c.result=r; cache[item.symbol]=c; store.cache=cache;
+          c.result=r;cache[item.symbol]=c;store.cache=cache;
         }catch{}
       }
       const loading=refreshing.has(item.symbol);
+      const range=c?.candles?calc52WeekRange(c.candles):null;
+      const rangeText=range?`${range.full52?"52W":"履歴内"} 高値 <strong>${range.fromHigh.toFixed(1)}%</strong> / 安値 <strong>+${range.fromLow.toFixed(1)}%</strong>`:"";
+
       return `<div class="stock" data-symbol="${esc(item.symbol)}">
         <div class="grow">
           <div class="ticker">${esc(item.symbol)}</div>
           <div class="name">${esc(item.name||item.symbol)}</div>
+          ${rangeText?`<div class="list-range">${rangeText}</div>`:""}
         </div>
-        ${loading ? `<div class="spinner"></div>` :
-          r ? `<div><div class="score">${Math.round(r.score)}</div><div class="label">${esc(r.action || r.strengthLabel)}</div></div>` :
-          `<div class="label">未判定</div>`}
+        ${reorderMode
+          ? `<div class="reorder-controls">
+               <button class="reorder-btn up-btn" data-symbol="${esc(item.symbol)}" ${index===0?"disabled":""}>↑</button>
+               <button class="reorder-btn down-btn" data-symbol="${esc(item.symbol)}" ${index===watchlist.length-1?"disabled":""}>↓</button>
+             </div>`
+          : loading
+            ? `<div class="spinner"></div>`
+            : r
+              ? `<div><div class="score">${Math.round(r.score)}</div><div class="label">${esc(r.action||r.strengthLabel)}</div></div>`
+              : `<div class="label">未判定</div>`}
       </div>`;
     }).join("");
-    document.querySelectorAll(".stock").forEach(el=>{
-      el.addEventListener("click",()=>showDetail(el.dataset.symbol));
-    });
+
+    if(reorderMode){
+      document.querySelectorAll(".up-btn").forEach(btn=>btn.addEventListener("click",e=>{e.stopPropagation();moveWatchItem(btn.dataset.symbol,-1);}));
+      document.querySelectorAll(".down-btn").forEach(btn=>btn.addEventListener("click",e=>{e.stopPropagation();moveWatchItem(btn.dataset.symbol,1);}));
+    }else{
+      document.querySelectorAll(".stock").forEach(el=>el.addEventListener("click",()=>showDetail(el.dataset.symbol)));
+    }
   }
 
   function showDetail(symbol){
@@ -1104,6 +1183,7 @@
       $("detailPrice").textContent="未取得";
       $("detailDate").textContent="右上の↻でデータを取得してください";
       $("scoreCard").innerHTML=`<h3>TA強度</h3><div class="muted small">まだデータがありません。</div>`;
+      $("range52Card").innerHTML=`<h3>52週レンジ</h3><div class="muted small">未取得</div>`;
       $("divergenceCard").innerHTML=`<h3>ダイバージェンス</h3><div class="muted small">未判定</div>`;
       $("levelsCard").innerHTML=`<h3>売買プラン</h3><div class="muted small">未判定</div>`;
       $("reasonsCard").innerHTML=`<h3>判定理由</h3><div class="muted small">未判定</div>`;
@@ -1148,6 +1228,21 @@
       <div class="metric-reason" style="margin-top:10px;">
         TA強度は銘柄の技術的な強さ、エントリー判断は今の価格位置を別々に評価します。
       </div>`;
+
+    const range52=calc52WeekRange(candles);
+    if(range52){
+      const title=range52.full52?"52週レンジ":`取得履歴レンジ（${range52.count}営業日）`;
+      $("range52Card").innerHTML=`
+        <h3>${title}</h3>
+        <div class="range-grid">
+          <div class="range-box"><div class="k">${range52.full52?"52週高値":"履歴内高値"}</div><div class="v">${money(range52.high)}</div><div class="sub">現在値は高値から ${range52.fromHigh.toFixed(1)}%</div></div>
+          <div class="range-box"><div class="k">${range52.full52?"52週安値":"履歴内安値"}</div><div class="v">${money(range52.low)}</div><div class="sub">現在値は安値から +${range52.fromLow.toFixed(1)}%</div></div>
+        </div>
+        <div class="range-track"><div class="range-fill" style="width:${range52.position}%"></div><div class="range-dot" style="left:${range52.position}%"></div></div>
+        <div class="range-labels"><span>安値</span><span>現在位置 ${range52.position.toFixed(0)}%</span><span>高値</span></div>
+        ${range52.full52?"":`<div class="metric-reason" style="margin-top:9px;">52週分の履歴がまだないため、取得できる全期間で表示しています。</div>`}
+      `;
+    }
 
     const topDiv=r.divergences[0];
     const divAlert=topDiv && topDiv.strength>=65
@@ -1329,6 +1424,13 @@
     $("settingsModal").classList.remove("hidden");
   }
   function closeSettings(){ $("settingsModal").classList.add("hidden"); }
+
+  $("reorderBtn").addEventListener("click",()=>{
+    if(listMode==="screen") setListMode("watch");
+    reorderMode=!reorderMode;
+    renderWatchlist();
+    toast(reorderMode?"並べ替えモード：↑↓で順番を変更":"並べ替えを終了しました");
+  });
 
   $("watchTabBtn").addEventListener("click",()=>setListMode("watch"));
   $("screenTabBtn").addEventListener("click",()=>setListMode("screen"));
