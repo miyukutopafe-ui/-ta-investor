@@ -363,6 +363,27 @@
     }
     .mode-section:first-child { border-top:0; padding-top:0; }
     .mode-title { font-size:11px; font-weight:900; margin-bottom:6px; }
+    .dual-score {
+      display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:10px;
+    }
+    .dual-box {
+      background:var(--card2); border:1px solid var(--line); border-radius:11px; padding:9px;
+    }
+    .dual-box .k { color:var(--muted); font-size:9px; }
+    .dual-box .v { font-size:21px; font-weight:900; line-height:1; margin-top:4px; }
+    .dual-box .sub { color:var(--muted); font-size:8px; margin-top:4px; line-height:1.3; }
+    .confidence-inline {
+      display:inline-flex; align-items:center; gap:4px; margin-left:4px;
+      padding:3px 6px; border-radius:999px; font-size:8px; font-weight:900;
+      border:1px solid var(--line); background:var(--card2);
+    }
+    .confidence-high { color:var(--green); border-color:rgba(67,209,123,.28); }
+    .confidence-mid { color:var(--yellow); border-color:rgba(242,214,75,.28); }
+    .confidence-low { color:var(--red); border-color:rgba(255,95,103,.28); }
+    .similarity-meta {
+      margin-top:7px; color:var(--muted); font-size:9px; line-height:1.45;
+    }
+    .similarity-meta strong { color:var(--text); }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -409,7 +430,7 @@
         <div class="screen-head">
           <div class="grow">
             <h2>スクリーナー</h2>
-            <p>ウォッチリスト内の取得済み日足を、現在のTAロジックで横断比較します。</p>
+            <p>Timing＝今のシグナル完成度、類似実績＝過去に似た局面がどれくらい機能したか。2つを分けて比較します。</p>
           </div>
           <button class="secondary" id="scanRefreshBtn">再計算</button>
         </div>
@@ -433,8 +454,8 @@
             <option value="risk">損切り幅が狭い順</option>
             <option value="52high">52週高値に近い順</option>
             <option value="52low">52週安値に近い順</option>
-            <option value="empirical">類似局面20D勝率順</option>
-            <option value="escore">実績スコア順</option>
+            <option value="empirical">類似20D勝率順</option>
+            <option value="escore">類似実績Score順</option>
           </select>
         </div>
 
@@ -1790,8 +1811,12 @@
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
     if(!candidates.length) return null;
 
+    const modeCandidateCount=candidates.length;
     const exactEntry=candidates.filter(x=>x.et===f.et);
-    if(exactEntry.length>=15) candidates=exactEntry;
+    const exactEntryCount=exactEntry.length;
+    const entryFiltered=exactEntry.length>=15;
+    if(entryFiltered) candidates=exactEntry;
+    const candidateCount=candidates.length;
 
     const scored=candidates.map(x=>({x,sim:sampleSimilarity(x,f)}))
       .sort((a,b)=>b.sim-a.sim);
@@ -1854,7 +1879,12 @@
       quality,
       bucket,
       baseline,
-      currentConditions:maskNames(f.cm)
+      currentConditions:maskNames(f.cm),
+      candidateCount,
+      modeCandidateCount,
+      exactEntryCount,
+      entryFiltered,
+      selectedCount:rows.length
     };
   }
 
@@ -1977,7 +2007,8 @@
       <div class="sim-note">
         類似局面検索では、短期/フル履歴を分離したうえで、
         TA・Timing・RCI9・強気DIV・Trigger・Context・Risk・出来高・エントリー型・点灯条件を比較します。
-        1銘柄が母集団を占有しないよう、類似候補は1銘柄あたり最大8件に制限します。
+        1銘柄が母集団を占有しないよう、類似候補は1銘柄あたり最大8件、採用は最大40件に制限します。
+        一覧では「類似40/候補312」のように、採用数と候補数を分けて表示します。
       </div>
       ${renderModeCalibration("F",calibration)}
       ${renderModeCalibration("S",calibration)}
@@ -2129,9 +2160,22 @@
             <div class="screen-symbol">${esc(x.item.symbol)}</div>
             <div class="screen-action">${esc(r.action)} ・ ${esc(mode)}</div>
           </div>
-          <div class="screen-main-score">
-            <strong>${Math.round(r.timingScore)}</strong>
-            <div>Timing</div>
+        </div>
+
+        <div class="dual-score">
+          <div class="dual-box">
+            <div class="k">Timing</div>
+            <div class="v">${Math.round(r.timingScore)}</div>
+            <div class="sub">${esc(r.action)}</div>
+          </div>
+          <div class="dual-box">
+            <div class="k">類似実績</div>
+            <div class="v">${x.empirical?x.empirical.empiricalScore.toFixed(0):"—"}</div>
+            <div class="sub">
+              ${x.empirical
+                ? `信頼度 ${x.empirical.quality.label}`
+                : "未校正"}
+            </div>
           </div>
         </div>
 
@@ -2148,9 +2192,11 @@
         </div>
         ${x.range52?`<div class="screen-range">${x.range52.full52?"52W":"履歴内"}高値から ${x.range52.fromHigh.toFixed(1)}% / 安値から +${x.range52.fromLow.toFixed(1)}%</div>`:""}
         ${x.empirical?`<div class="screen-range">
-          類似実績: Score ${x.empirical.empiricalScore.toFixed(0)} / 20D勝率 ${x.empirical.stats.winRate.toFixed(0)}% /
-          平均 ${x.empirical.stats.avgReturn>=0?"+":""}${x.empirical.stats.avgReturn.toFixed(1)}% /
-          n=${x.empirical.stats.n}・${x.empirical.modeLabel}
+          20D勝率 ${x.empirical.stats.winRate.toFixed(0)}% / 平均 ${x.empirical.stats.avgReturn>=0?"+":""}${x.empirical.stats.avgReturn.toFixed(1)}% /
+          類似 ${x.empirical.selectedCount}/${x.empirical.candidateCount} /
+          類似度 ${x.empirical.avgSimilarity.toFixed(0)}% /
+          ${x.empirical.symbols}銘柄 /
+          信頼度 ${x.empirical.quality.label}
         </div>`:""}
       </div>`;
     }).join("");
@@ -2334,7 +2380,7 @@
         const b=emp.baseline;
         return `<div class="empirical">
           <div class="title">
-            類似局面実績 ・ ${emp.modeLabel}
+            Timing ${Math.round(r.timingScore)} × 類似実績 ${emp.empiricalScore.toFixed(0)} ・ ${emp.modeLabel}
             <span class="cal-badge ${emp.quality.cls}">信頼度 ${emp.quality.label}</span>
           </div>
           <div class="numbers">
@@ -2346,8 +2392,13 @@
             <div class="nbox"><div class="k">類似サンプル</div><div class="v">${emp.stats.n}</div></div>
           </div>
           <div class="foot">
-            平均類似度 ${emp.avgSimilarity.toFixed(0)}% / ${emp.symbols}銘柄 /
+            類似 ${emp.selectedCount}/${emp.candidateCount}候補 /
+            平均類似度 ${emp.avgSimilarity.toFixed(0)}% /
+            ${emp.symbols}銘柄 /
             Entry ${emp.entryLabel}<br>
+            ${emp.entryFiltered
+              ? `Entry型を一致させて検索（同型候補 ${emp.exactEntryCount} / モード全体 ${emp.modeCandidateCount}）`
+              : `Entry型候補が少ないためモード全体から検索（同型候補 ${emp.exactEntryCount} / モード全体 ${emp.modeCandidateCount}）`}<br>
             ${b&&b.n?`同モードのTiming ${emp.bucket}全体: 勝率${b.winRate.toFixed(0)}% / 平均${b.avgReturn>=0?"+":""}${b.avgReturn.toFixed(1)}% / n=${b.n}`:"同Timing帯の基準値はサンプル不足"}<br>
             現在条件: ${emp.currentConditions.length?emp.currentConditions.slice(0,5).join(" / "):"特記事項なし"}
           </div>
