@@ -149,6 +149,14 @@
     .chart-toolbar { display:flex; gap:8px; margin:0 0 10px; }
     .chart-mode { flex:1; border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:var(--card2); color:var(--muted); font-weight:800; font-size:11px; }
     .chart-mode.active { color:#001017; background:var(--cyan); border-color:var(--cyan); }
+    .mode-badge { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:999px; background:rgba(242,214,75,.10); border:1px solid rgba(242,214,75,.25); color:#f6e996; font-size:11px; font-weight:800; margin-top:8px; }
+    .risk-good { color:var(--green); }
+    .risk-mid { color:var(--yellow); }
+    .risk-wide { color:var(--red); }
+    .rr-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+    .rr-box { background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:10px; }
+    .rr-box .k { color:var(--muted); font-size:10px; }
+    .rr-box .v { font-size:16px; font-weight:900; margin-top:3px; }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -204,7 +212,7 @@
         <canvas id="chart" width="720" height="720"></canvas>
         <div class="legend">
           MA20＝黄 / MA50＝橙 / MA200＝青<br>
-          PB＝押し目候補 / RC＝反転確認 / BO＝ブレイク候補<br>
+          PB＝押し目候補 / ER＝初動確認 / RC＝反転確認 / BO＝主要ブレイク<br>
           DIV＝Regular divergence / H-DIV＝Hidden divergence<br>
           実線＝確認済み / 破線＝未確認
         </div>
@@ -500,20 +508,67 @@
 
   // ---------- TA Engine ----------
   function evaluateTA(symbol,candles){
-    if(candles.length<220) throw new Error("TA判定に必要な日足が不足しています。");
+    if(candles.length<35) throw new Error(`日足が不足しています（${candles.length}本）。最低35本必要です。`);
+
     const latest=candles[candles.length-1], closes=candles.map(c=>c.close);
-    const ma20=sma(closes,20),ma50=sma(closes,50),ma200=sma(closes,200);
+    const historyCount=candles.length;
+    const shortHistoryMode=historyCount<220;
+
+    const ma10=sma(closes,10);
+    const ma20=sma(closes,20);
+    const ma40=sma(closes,40);
+    const ma50=sma(closes,50);
+    const ma200=sma(closes,200);
+
     const r9=rci(closes,9),r26=rci(closes,26),m=macd(closes);
     const av=avgVolume(candles,20),a14=atr(candles,14),lo=recentLow(candles,20),hi=recentHigh(candles,20);
+
     const prior20=candles.slice(-21,-1);
     const priorHigh20=prior20.length ? Math.max(...prior20.map(c=>c.high)) : hi;
+
+    function latestSwingHigh(candles,radius=2,lookback=20){
+      const start=Math.max(radius,candles.length-lookback);
+      const end=candles.length-radius;
+      const pivots=[];
+      for(let i=start;i<end;i++){
+        const h=candles[i].high;
+        let ok=true;
+        for(let j=i-radius;j<=i+radius;j++){
+          if(j===i) continue;
+          if(h<candles[j].high){ok=false;break;}
+        }
+        if(ok) pivots.push({index:i,price:h});
+      }
+      if(!pivots.length){
+        const completed=candles.slice(Math.max(0,candles.length-4),candles.length-1);
+        return completed.length?Math.max(...completed.map(c=>c.high)):latest.high;
+      }
+      let p=pivots[pivots.length-1].price;
+      // 遠すぎる旧高値は「初動確認」には使わない
+      if((p-latest.close)/latest.close>0.15){
+        const completed=candles.slice(Math.max(0,candles.length-4),candles.length-1);
+        if(completed.length) p=Math.max(...completed.map(c=>c.high));
+      }
+      return p;
+    }
+
+    const earlyReversalLevel=Math.max(latestSwingHigh(candles),latest.close+0.20*a14);
     const parts=[];
 
-    let tr=0,trr=[];
-    if(latest.close>ma200){tr+=.40;trr.push("株価 > 200日線");} else trr.push("株価 < 200日線");
-    if(ma20>ma50){tr+=.35;trr.push("20日線 > 50日線");} else trr.push("20日線 ≤ 50日線");
-    if(ma50>ma200){tr+=.25;trr.push("50日線 > 200日線");} else trr.push("50日線 ≤ 200日線");
-    parts.push({name:"トレンド",score:tr*30,max:30,reason:trr.join(" / ")});
+    // Trend score: history lengthに応じてモード切替
+    let trendScore=0,trr=[];
+    if(shortHistoryMode){
+      if(latest.close>ma20){trendScore+=12;trr.push("株価 > 20日線");} else trr.push("株価 < 20日線");
+      if(ma10!=null&&ma20!=null&&ma10>ma20){trendScore+=10;trr.push("10日線 > 20日線");}
+      else trr.push("10日線 ≤ 20日線");
+      if(ma40!=null&&ma20!=null&&ma20>ma40){trendScore+=8;trr.push("20日線 > 40日線");}
+      else trr.push("20日線 ≤ 40日線");
+    }else{
+      if(latest.close>ma200){trendScore+=12;trr.push("株価 > 200日線");} else trr.push("株価 < 200日線");
+      if(ma20>ma50){trendScore+=10.5;trr.push("20日線 > 50日線");} else trr.push("20日線 ≤ 50日線");
+      if(ma50>ma200){trendScore+=7.5;trr.push("50日線 > 200日線");} else trr.push("50日線 ≤ 200日線");
+    }
+    parts.push({name:"トレンド",score:trendScore,max:30,reason:trr.join(" / ")});
 
     let mo=0,mor=[];
     if(m.histogram>0){mo+=.45;mor.push("MACDヒストグラム > 0");}
@@ -526,7 +581,7 @@
 
     if(r26>=80){mo+=.08;mor.push(`RCI26 ${r26.toFixed(1)}：中期過熱`);}
     else if(r26>-20){mo+=.25;mor.push(`RCI26 ${r26.toFixed(1)}：中期良好`);}
-    else {mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);}
+    else mor.push(`RCI26 ${r26.toFixed(1)}：中期弱め`);
     parts.push({name:"モメンタム",score:Math.min(mo,1)*30,max:30,reason:mor.join(" / ")});
 
     const vr=latest.volume/Math.max(av,1);
@@ -558,7 +613,7 @@
     const score=round1(clamp(base+divAdj,0,100));
     const strengthLabel=score>=80?"非常に強い":score>=65?"強い":score>=50?"中立":score>=35?"弱い":"非常に弱い";
 
-    // v0.5: 買い候補と上方向の確認ラインを分離
+    // Trade plan
     let pullbackEntry;
     if(latest.close>=ma20){
       pullbackEntry=Math.max(ma20,latest.close-0.75*a14);
@@ -567,49 +622,47 @@
     }
     pullbackEntry=Math.min(pullbackEntry,latest.close);
 
-    // MA20が現在値より上なら「指値」ではなく反転確認ライン
     const reclaimLevel=ma20>latest.close ? ma20 : null;
-
-    // 直近高値または0.5ATR上をブレイク候補にする
     const breakoutLevel=Math.max(priorHigh20,latest.close+0.50*a14);
 
-    // 損切り
     let stopLoss=Math.min(lo-0.25*a14,latest.close-2.0*a14);
     stopLoss=Math.max(stopLoss,0.01);
 
-    // 利確は押し目候補からの2R/3R
     const riskFromPullback=Math.max(pullbackEntry-stopLoss,a14*0.50);
     const takeProfit1=pullbackEntry+2.0*riskFromPullback;
     const takeProfit2=pullbackEntry+3.0*riskFromPullback;
 
+    const stopDistancePct=(pullbackEntry-stopLoss)/Math.max(pullbackEntry,0.01)*100;
+    const stopWidthLabel=stopDistancePct<=6?"標準":stopDistancePct<=10?"やや広い":"広い";
+
     const tradePlan={
       pullbackEntry:round2(pullbackEntry),
+      earlyReversalLevel:round2(earlyReversalLevel),
       reclaimLevel:reclaimLevel==null?null:round2(reclaimLevel),
       breakoutLevel:round2(breakoutLevel),
       stopLoss:round2(stopLoss),
       takeProfit1:round2(takeProfit1),
       takeProfit2:round2(takeProfit2),
-      riskPerShare:round2(riskFromPullback)
+      riskPerShare:round2(riskFromPullback),
+      stopDistancePct:round1(stopDistancePct),
+      stopWidthLabel
     };
 
     const distanceToPullback=(latest.close-pullbackEntry)/latest.close;
     const distanceToHigh=(hi-latest.close)/latest.close;
     const aboveMA20=latest.close>=ma20;
-    const overheated=(r9>=80 || r26>=80);
+    const overheated=(r9>=80||r26>=80);
     const oversold=(r9<=-80);
-    const strongBullDiv=divergences.some(d=>d.direction==="bullish" && d.confirmed && d.strength>=65);
-    const strongBearDiv=divergences.some(d=>d.direction==="bearish" && d.confirmed && d.strength>=65);
+    const strongBullDiv=divergences.some(d=>d.direction==="bullish"&&d.confirmed&&d.strength>=65);
+    const strongBearDiv=divergences.some(d=>d.direction==="bearish"&&d.confirmed&&d.strength>=65);
 
     let timingScore=50;
     const timingReasons=[];
     if(score>=65){timingScore+=10;timingReasons.push("TA強度が高い");}
     if(score<50){timingScore-=15;timingReasons.push("TA強度が弱い");}
 
-    if(Math.abs(distanceToPullback)<=0.025){
-      timingScore+=18;timingReasons.push("押し目候補に近い");
-    }else if(distanceToPullback>0.08){
-      timingScore-=12;timingReasons.push("押し目候補から上に離れている");
-    }
+    if(Math.abs(distanceToPullback)<=0.025){timingScore+=18;timingReasons.push("押し目候補に近い");}
+    else if(distanceToPullback>0.08){timingScore-=12;timingReasons.push("押し目候補から上に離れている");}
 
     if(overheated){timingScore-=15;timingReasons.push("RCI過熱");}
     else if(oversold&&score>=50){timingScore+=10;timingReasons.push("RCI売られ過ぎ");}
@@ -617,9 +670,9 @@
     if(vr>=1.5&&latest.close>latest.open){timingScore+=8;timingReasons.push("出来高を伴う陽線");}
     if(strongBullDiv){timingScore+=15;timingReasons.push("確認済み強気ダイバージェンス");}
     if(strongBearDiv){timingScore-=20;timingReasons.push("確認済み弱気ダイバージェンス");}
-    if(distanceToHigh>=0&&distanceToHigh<=0.02&&!strongBullDiv){
-      timingScore-=8;timingReasons.push("直近高値が近い");
-    }
+    if(distanceToHigh>=0&&distanceToHigh<=0.02&&!strongBullDiv){timingScore-=8;timingReasons.push("直近高値が近い");}
+    if(stopDistancePct>10){timingScore-=8;timingReasons.push("損切り幅が広い");}
+
     timingScore=round1(clamp(timingScore,0,100));
 
     let action,actionDetail;
@@ -634,11 +687,11 @@
       actionDetail="銘柄は強いが、押し目候補まで引きつけたい";
     }else if(score>=50&&!aboveMA20){
       action="反転確認待ち";
-      actionDetail="MA20回復または直近高値突破を確認してから";
+      actionDetail="初動確認→MA20回復の順で確認したい";
     }else if(score<50){
       action="見送り";
       actionDetail=strongBullDiv
-        ?"強気ダイバージェンスはあるが、トレンド回復の確認が必要"
+        ?"強気ダイバージェンスはあるが、初動確認を待ちたい"
         :"現時点ではテクニカル優位性が弱い";
     }else{
       action="様子見";
@@ -647,8 +700,10 @@
 
     return {
       symbol,score,strengthLabel,parts,divergences,divAdj:round1(divAdj),
-      tradePlan,latest,ma20,ma50,ma200,r9,r26,volumeRatio:vr,
-      timingScore,action,actionDetail,timingReasons
+      tradePlan,latest,ma10,ma20,ma40,ma50,ma200,r9,r26,volumeRatio:vr,
+      timingScore,action,actionDetail,timingReasons,
+      historyMode:shortHistoryMode?"short":"full",
+      historyCount
     };
   }
 
@@ -675,7 +730,7 @@
     })).filter(c=>[c.open,c.high,c.low,c.close].every(Number.isFinite))
       .sort((a,b)=>a.date.localeCompare(b.date));
 
-    if(candles.length<220) throw new Error(`日足が不足しています（${candles.length}本）。`);
+    if(candles.length<35) throw new Error(`日足が不足しています（${candles.length}本）。最低35本必要です。`);
     return candles;
   }
 
@@ -789,6 +844,9 @@
         <div class="pill">${esc(r.strengthLabel)}</div>
       </div>
       <div class="bar"><span style="width:${clamp(r.score,0,100)}%"></span></div>
+      ${r.historyMode==="short"
+        ? `<div class="mode-badge">短期モード・日足${r.historyCount}本（MA200未使用）</div>`
+        : `<div class="mode-badge" style="background:rgba(67,209,123,.08);border-color:rgba(67,209,123,.22);color:#bff5d1;">フル履歴モード・日足${r.historyCount}本</div>`}
 
       <div class="decision-grid">
         <div class="decision-box">
@@ -830,14 +888,36 @@
         </div>`).join("") :
         `<div class="muted small">直近80営業日に有効なダイバージェンスは検出されていません。</div>`);
 
-    const tpBasisNote=`TP1/TP2は「押し目候補」からの2R/3R。反転確認やブレイクで約定した場合は、実際の約定価格から再計算します。`;
+    const riskClass=r.tradePlan.stopDistancePct<=6?"risk-good":r.tradePlan.stopDistancePct<=10?"risk-mid":"risk-wide";
+    const tpBasisNote=`TP1/TP2は「押し目候補」からの2R/3R。初動確認・反転確認・ブレイクで約定した場合は、その約定価格から再計算します。`;
     $("levelsCard").innerHTML=`<h3>売買プラン</h3>
-      <div class="level"><span>押し目候補</span><strong>${money(r.tradePlan.pullbackEntry)}</strong></div>
-      <div class="level"><span>反転確認</span><strong>${r.tradePlan.reclaimLevel==null?"—":money(r.tradePlan.reclaimLevel)}</strong></div>
-      <div class="level"><span>ブレイク候補</span><strong>${money(r.tradePlan.breakoutLevel)}</strong></div>
-      <div class="level"><span>損切り</span><strong>${money(r.tradePlan.stopLoss)}</strong></div>
+      <div class="level"><span>押し目候補（PB）</span><strong>${money(r.tradePlan.pullbackEntry)}</strong></div>
+      <div class="level"><span>初動確認（ER）</span><strong>${money(r.tradePlan.earlyReversalLevel)}</strong></div>
+      <div class="level"><span>反転確認（RC）</span><strong>${r.tradePlan.reclaimLevel==null?"—":money(r.tradePlan.reclaimLevel)}</strong></div>
+      <div class="level"><span>主要ブレイク（BO）</span><strong>${money(r.tradePlan.breakoutLevel)}</strong></div>
+      <div class="level"><span>損切り（SL）</span><strong>${money(r.tradePlan.stopLoss)}</strong></div>
       <div class="level"><span>利確①（2R）</span><strong>${money(r.tradePlan.takeProfit1)}</strong></div>
       <div class="level"><span>利確②（3R）</span><strong>${money(r.tradePlan.takeProfit2)}</strong></div>
+
+      <div class="rr-grid">
+        <div class="rr-box">
+          <div class="k">1株リスク</div>
+          <div class="v">${money(r.tradePlan.riskPerShare)}</div>
+        </div>
+        <div class="rr-box">
+          <div class="k">損切り幅</div>
+          <div class="v ${riskClass}">${r.tradePlan.stopDistancePct.toFixed(1)}%・${r.tradePlan.stopWidthLabel}</div>
+        </div>
+        <div class="rr-box">
+          <div class="k">TP1 R/R</div>
+          <div class="v">1 : 2</div>
+        </div>
+        <div class="rr-box">
+          <div class="k">TP2 R/R</div>
+          <div class="v">1 : 3</div>
+        </div>
+      </div>
+
       <div class="metric-reason" style="margin-top:10px;">${tpBasisNote}</div>`;
 
     $("reasonsCard").innerHTML=`<h3>判定理由</h3>`+
@@ -875,6 +955,7 @@
     let minP,maxP;
     const planValues=[
       r.tradePlan.pullbackEntry,
+      r.tradePlan.earlyReversalLevel,
       r.tradePlan.reclaimLevel,
       r.tradePlan.breakoutLevel,
       r.tradePlan.stopLoss,
@@ -943,6 +1024,7 @@
     level(r.tradePlan.takeProfit2,"TP2","#43d17b",[5,3]);
     level(r.tradePlan.takeProfit1,"TP1","#43d17b",[3,3]);
     level(r.tradePlan.pullbackEntry,"PB","#4ad8ff",[5,3]);
+    level(r.tradePlan.earlyReversalLevel,"ER","#68e3c1",[4,3]);
     if(r.tradePlan.reclaimLevel!=null) level(r.tradePlan.reclaimLevel,"RC","#f2d64b",[4,3]);
     level(r.tradePlan.breakoutLevel,"BO","#f29b4b",[4,3]);
     level(r.tradePlan.stopLoss,"SL","#ff5f67",[5,3]);
