@@ -276,6 +276,24 @@
       margin-top:10px; padding:12px; background:var(--card2); border-radius:12px;
     }
     .bt-date-title { font-weight:900; font-size:13px; margin-bottom:7px; }
+    .period-toolbar {
+      display:flex; gap:6px; margin:8px 0 10px;
+    }
+    .period-btn {
+      flex:1; border:1px solid var(--line); border-radius:9px; padding:7px 5px;
+      background:var(--card2); color:var(--muted); font-size:10px; font-weight:850;
+    }
+    .period-btn.active { background:var(--cyan); color:#001017; border-color:var(--cyan); }
+    .crosshair-help {
+      margin-top:7px; color:var(--muted); font-size:10px; line-height:1.45;
+    }
+    .crosshair-readout {
+      display:none; margin:8px 0 0; padding:9px 10px; border-radius:11px;
+      background:var(--card2); border:1px solid var(--line);
+      font-size:11px; line-height:1.45;
+    }
+    .crosshair-readout.active { display:block; }
+    .crosshair-readout strong { font-size:13px; }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -377,7 +395,15 @@
           <button class="chart-mode active" id="chartFocusBtn">価格中心</button>
           <button class="chart-mode" id="chartAllBtn">全ライン</button>
         </div>
+        <div class="period-toolbar">
+          <button class="period-btn" data-period="63">3か月</button>
+          <button class="period-btn active" data-period="126">6か月</button>
+          <button class="period-btn" data-period="252">1年</button>
+          <button class="period-btn" data-period="all">全期間</button>
+        </div>
         <canvas id="chart" width="720" height="720"></canvas>
+        <div id="crosshairReadout" class="crosshair-readout"></div>
+        <div class="crosshair-help">チャートを長押しすると縦線が出ます。そのまま左右へ動かすと過去の日付を選べます。選択日付はバックテスト欄にも自動入力されます。</div>
         <div class="legend">
           MA20＝黄 / MA50＝橙 / MA200＝青<br>
           PB＝押し目候補 / ER＝初動確認 / RC＝反転確認 / BO＝主要ブレイク<br>
@@ -414,6 +440,7 @@
             <input id="btDateInput" class="bt-date" type="date">
             <button class="secondary" id="btDateBtn">検証</button>
           </div>
+          <div class="small muted" style="margin-top:5px;">チャートの長押しで選んだ日付がここへ自動入力されます。</div>
           <div id="btDateResult"></div>
         </div>
       </div>
@@ -477,6 +504,9 @@
   let screenPreset = "all";
   let screenSort = "timing";
   let reorderMode = false;
+  let chartPeriod = 126;
+  let chartCrosshair = {active:false,index:null,date:null};
+  let chartLongPressTimer = null;
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -948,7 +978,7 @@
     const url=new URL("https://api.twelvedata.com/time_series");
     url.searchParams.set("symbol",symbol);
     url.searchParams.set("interval","1day");
-    url.searchParams.set("outputsize","260");
+    url.searchParams.set("outputsize","1000");
     url.searchParams.set("order","ASC");
     url.searchParams.set("timezone","America/New_York");
     url.searchParams.set("apikey",store.apiKey);
@@ -1152,6 +1182,64 @@
         </div>`;
     }catch(e){
       $("btDateResult").innerHTML=`<div class="bt-note">${esc(e.message||String(e))}</div>`;
+    }
+  }
+
+
+  function formatChartDate(dateStr,withYear=false){
+    if(!dateStr) return "";
+    const [y,m,d]=dateStr.split("-").map(Number);
+    if(withYear) return `${y}/${m}/${d}`;
+    return `${m}/${d}`;
+  }
+
+  function chartVisibleSlice(all){
+    if(chartPeriod==="all") return {visible:all,offset:0};
+    const count=Math.max(20,Number(chartPeriod)||126);
+    const visible=all.slice(-count);
+    return {visible,offset:all.length-visible.length};
+  }
+
+  function selectedCandleFromClientX(clientX,canvas,all){
+    const rect=canvas.getBoundingClientRect();
+    const W=rect.width;
+    const padL=8, padR=58;
+    const pw=Math.max(1,W-padL-padR);
+    const {visible,offset}=chartVisibleSlice(all);
+    const localX=Math.max(padL,Math.min(padL+pw,clientX-rect.left));
+    const ratio=(localX-padL)/pw;
+    const vi=Math.round(ratio*Math.max(visible.length-1,0));
+    return {index:offset+vi,visibleIndex:vi,offset,visible};
+  }
+
+  function setChartCrosshair(index,candles,redraw=true){
+    if(!Number.isInteger(index)||index<0||index>=candles.length) return;
+    chartCrosshair={active:true,index,date:candles[index].date};
+    const c=candles[index];
+    const prev=index>0?candles[index-1].close:c.close;
+    const day=(c.close-prev)/Math.max(prev,0.01)*100;
+    $("crosshairReadout").classList.add("active");
+    $("crosshairReadout").innerHTML=`
+      <strong>${formatChartDate(c.date,true)}</strong>　
+      終値 ${money(c.close)}　
+      <span class="${day>=0?"up":"down"}">${day>=0?"+":""}${day.toFixed(1)}%</span><br>
+      高値 ${money(c.high)} / 安値 ${money(c.low)} / 出来高 ${Math.round(c.volume||0).toLocaleString()}
+    `;
+    if($("btDateInput")){
+      $("btDateInput").value=c.date;
+    }
+    if(redraw&&currentSymbol&&cache[currentSymbol]?.candles){
+      const r=evaluateTA(currentSymbol,cache[currentSymbol].candles);
+      drawChart(cache[currentSymbol].candles,r);
+    }
+  }
+
+  function clearChartCrosshair(){
+    chartCrosshair={active:false,index:null,date:null};
+    $("crosshairReadout").classList.remove("active");
+    if(currentSymbol&&cache[currentSymbol]?.candles){
+      const r=evaluateTA(currentSymbol,cache[currentSymbol].candles);
+      drawChart(cache[currentSymbol].candles,r);
     }
   }
 
@@ -1375,6 +1463,8 @@
 
   function showDetail(symbol){
     currentSymbol=symbol;
+    chartCrosshair={active:false,index:null,date:null};
+    if($("crosshairReadout")) $("crosshairReadout").classList.remove("active");
     $("listView").classList.add("hidden");
     $("listHeader").classList.add("hidden");
     $("detailView").classList.remove("hidden");
@@ -1557,11 +1647,12 @@
     const W=cssW,H=cssH;
     ctx.fillStyle="#11131a";ctx.fillRect(0,0,W,H);
 
-    const visibleCount=90, visible=all.slice(-visibleCount), offset=all.length-visible.length;
+    const sliceInfo=chartVisibleSlice(all);
+    const visible=sliceInfo.visible, offset=sliceInfo.offset;
     const closes=all.map(c=>c.close);
     const ma20=smaSeries(closes,20).slice(offset),ma50=smaSeries(closes,50).slice(offset),ma200=smaSeries(closes,200).slice(offset);
 
-    const pad={l:8,r:58,t:12,b:18}, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
+    const pad={l:8,r:58,t:12,b:32}, pw=W-pad.l-pad.r, ph=H-pad.t-pad.b;
     let minP,maxP;
     const planValues=[
       r.tradePlan.pullbackEntry,
@@ -1639,6 +1730,60 @@
     level(r.tradePlan.breakoutLevel,"BO","#f29b4b",[4,3]);
     level(r.tradePlan.stopLoss,"SL","#ff5f67",[5,3]);
 
+    // X-axis date labels
+    ctx.save();
+    ctx.fillStyle="#9da3ae";
+    ctx.font="9px -apple-system";
+    ctx.textAlign="center";
+    ctx.textBaseline="top";
+    const labelCount=Math.min(6,visible.length);
+    if(labelCount>1){
+      for(let j=0;j<labelCount;j++){
+        const vi=Math.round(j*(visible.length-1)/(labelCount-1));
+        const xx=x(vi);
+        const isFirstOrLast=(j===0||j===labelCount-1);
+        ctx.fillText(formatChartDate(visible[vi].date,isFirstOrLast&&chartPeriod==="all"),xx,pad.t+ph+7);
+      }
+    }
+    ctx.restore();
+
+    // Long-press crosshair
+    if(chartCrosshair.active&&Number.isInteger(chartCrosshair.index)){
+      const vi=chartCrosshair.index-offset;
+      if(vi>=0&&vi<visible.length){
+        const xx=x(vi);
+        const c=all[chartCrosshair.index];
+
+        ctx.save();
+        ctx.strokeStyle="rgba(244,245,247,.80)";
+        ctx.lineWidth=1;
+        ctx.beginPath();
+        ctx.moveTo(xx,pad.t);
+        ctx.lineTo(xx,pad.t+ph);
+        ctx.stroke();
+
+        const yy=y(c.close);
+        ctx.fillStyle="#f4f5f7";
+        ctx.beginPath();
+        ctx.arc(xx,yy,4,0,Math.PI*2);
+        ctx.fill();
+
+        // date bubble at bottom
+        const dateText=formatChartDate(c.date,true);
+        ctx.font="bold 10px -apple-system";
+        const tw=ctx.measureText(dateText).width+12;
+        const bx=Math.max(pad.l,Math.min(xx-tw/2,pad.l+pw-tw));
+        const by=pad.t+ph-22;
+        ctx.fillStyle="rgba(39,43,52,.95)";
+        ctx.fillRect(bx,by,tw,18);
+        ctx.fillStyle="#fff";
+        ctx.textAlign="center";
+        ctx.textBaseline="middle";
+        ctx.fillText(dateText,bx+tw/2,by+9);
+        ctx.restore();
+      }
+    }
+
     r.divergences.slice(0,2).forEach(d=>{
       const x1=xAbs(d.firstPivot.index),x2=xAbs(d.secondPivot.index);if(x1==null||x2==null)return;
       const color=d.direction==="bullish"?"#68e3c1":"#ff75b5";
@@ -1707,6 +1852,65 @@
     if(!currentSymbol)return;
     refreshSymbol(currentSymbol).catch(()=>{});
   });
+  document.querySelectorAll(".period-btn").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      document.querySelectorAll(".period-btn").forEach(x=>x.classList.toggle("active",x===btn));
+      chartPeriod=btn.dataset.period==="all"?"all":Number(btn.dataset.period);
+      chartCrosshair={active:false,index:null,date:null};
+      $("crosshairReadout").classList.remove("active");
+      if(currentSymbol&&cache[currentSymbol]?.candles){
+        const r=evaluateTA(currentSymbol,cache[currentSymbol].candles);
+        drawChart(cache[currentSymbol].candles,r);
+      }
+    });
+  });
+
+  const chartCanvas=$("chart");
+
+  function startLongPress(clientX){
+    clearTimeout(chartLongPressTimer);
+    chartLongPressTimer=setTimeout(()=>{
+      if(!currentSymbol||!cache[currentSymbol]?.candles) return;
+      const hit=selectedCandleFromClientX(clientX,chartCanvas,cache[currentSymbol].candles);
+      setChartCrosshair(hit.index,cache[currentSymbol].candles,true);
+      if(navigator.vibrate) navigator.vibrate(20);
+    },350);
+  }
+
+  chartCanvas.addEventListener("touchstart",e=>{
+    if(e.touches.length!==1) return;
+    startLongPress(e.touches[0].clientX);
+  },{passive:true});
+
+  chartCanvas.addEventListener("touchmove",e=>{
+    if(e.touches.length!==1) return;
+    if(!chartCrosshair.active) return;
+    e.preventDefault();
+    if(!currentSymbol||!cache[currentSymbol]?.candles) return;
+    const hit=selectedCandleFromClientX(e.touches[0].clientX,chartCanvas,cache[currentSymbol].candles);
+    setChartCrosshair(hit.index,cache[currentSymbol].candles,true);
+  },{passive:false});
+
+  chartCanvas.addEventListener("touchend",()=>{
+    clearTimeout(chartLongPressTimer);
+  },{passive:true});
+
+  chartCanvas.addEventListener("touchcancel",()=>{
+    clearTimeout(chartLongPressTimer);
+  },{passive:true});
+
+  // Mouse support for desktop testing
+  chartCanvas.addEventListener("mousedown",e=>{
+    startLongPress(e.clientX);
+  });
+  chartCanvas.addEventListener("mousemove",e=>{
+    if(!chartCrosshair.active||e.buttons!==1) return;
+    if(!currentSymbol||!cache[currentSymbol]?.candles) return;
+    const hit=selectedCandleFromClientX(e.clientX,chartCanvas,cache[currentSymbol].candles);
+    setChartCrosshair(hit.index,cache[currentSymbol].candles,true);
+  });
+  chartCanvas.addEventListener("mouseup",()=>clearTimeout(chartLongPressTimer));
+
   $("chartFocusBtn").addEventListener("click",()=>{
     chartMode="focus";
     $("chartFocusBtn").classList.add("active");
