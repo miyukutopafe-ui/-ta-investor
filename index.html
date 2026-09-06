@@ -456,6 +456,22 @@
     }
     .strategy-tag.trend{color:#8ee8ff;border-color:rgba(74,216,255,.28)}
     .strategy-tag.reversal{color:#a7f1d4;border-color:rgba(104,227,193,.28)}
+    .archetype-chip{
+      display:inline-flex;align-items:center;max-width:100%;
+      margin-top:6px;padding:4px 7px;border-radius:999px;
+      border:1px solid rgba(104,227,193,.22);
+      background:rgba(104,227,193,.045);
+      color:#bfead9;font-size:8px;font-weight:850;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    .strategy-stat-grid{
+      display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:4px 8px;margin-top:6px;
+    }
+    .strategy-stat{font-size:8px;color:var(--muted)}
+    .strategy-stat strong{color:var(--text)}
+    .strategy-stat.good strong{color:var(--green)}
+    .strategy-stat.bad strong{color:var(--red)}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -678,11 +694,11 @@
     },
     set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
     get calibration() {
-      try { return JSON.parse(localStorage.getItem("ta_calibration_v020")) || null; } catch { return null; }
+      try { return JSON.parse(localStorage.getItem("ta_calibration_v021")) || null; } catch { return null; }
     },
     set calibration(v) {
-      if(v==null) localStorage.removeItem("ta_calibration_v020");
-      else localStorage.setItem("ta_calibration_v020", JSON.stringify(v));
+      if(v==null) localStorage.removeItem("ta_calibration_v021");
+      else localStorage.setItem("ta_calibration_v021", JSON.stringify(v));
     }
   };
 
@@ -2038,11 +2054,89 @@
     return xs.length?Math.max(...xs.map(d=>d.strength)):0;
   }
 
+
+  function reversalArchetype(r){
+    const bull=(r.divergences||[])
+      .filter(d=>d.direction==="bullish"&&d.confirmed)
+      .sort((a,b)=>b.strength-a.strength);
+
+    const regular=bull.find(d=>d.kind==="regular"&&d.strength>=55);
+    const hidden=bull.find(d=>d.kind==="hidden"&&d.strength>=55);
+    const oversold80=r.r9<=-80;
+    const oversold60=r.r9<=-60;
+    const vol=r.volumeRatio>=1.30;
+    const lateStage=[3,4].includes(r.stage?.code||0);
+    const trendStage=(r.stage?.code||0)===2;
+    const ma200Near=r.ma200!=null &&
+      Math.abs((r.latest.close-r.ma200)/Math.max(r.latest.close,.01)*100)<=5;
+
+    if(regular&&oversold60&&vol){
+      return {code:"RDOV",family:"regular",label:"Regular強気DIV＋売られ過ぎ＋出来高"};
+    }
+    if(regular&&oversold60){
+      return {code:"RDO",family:"regular",label:"Regular強気DIV＋売られ過ぎ"};
+    }
+    if(regular&&lateStage){
+      return {code:"RDS",family:"regular",label:"Stage 3/4＋Regular強気DIV"};
+    }
+    if(hidden&&trendStage){
+      return {code:"HDT",family:"hidden",label:"Hidden強気DIV＋上昇押し目"};
+    }
+    if(hidden&&oversold60){
+      return {code:"HDO",family:"hidden",label:"Hidden強気DIV＋売られ過ぎ"};
+    }
+    if(ma200Near&&oversold60){
+      return {code:"M2O",family:"support",label:"MA200近辺＋売られ過ぎ"};
+    }
+    if(oversold80&&vol){
+      return {code:"OV",family:"oversold",label:"極端売られ過ぎ＋出来高"};
+    }
+    if(regular){
+      return {code:"RD",family:"regular",label:"Regular強気DIV"};
+    }
+    if(hidden){
+      return {code:"HD",family:"hidden",label:"Hidden強気DIV"};
+    }
+    if(oversold80){
+      return {code:"O8",family:"oversold",label:"RCI極端売られ過ぎ"};
+    }
+    if(oversold60){
+      return {code:"O6",family:"oversold",label:"RCI売られ過ぎ"};
+    }
+    return {code:"NONE",family:"none",label:"反転型未成立"};
+  }
+
+  function archetypeLabel(code){
+    return {
+      RDOV:"Regular強気DIV＋売られ過ぎ＋出来高",
+      RDO:"Regular強気DIV＋売られ過ぎ",
+      RDS:"Stage 3/4＋Regular強気DIV",
+      HDT:"Hidden強気DIV＋上昇押し目",
+      HDO:"Hidden強気DIV＋売られ過ぎ",
+      M2O:"MA200近辺＋売られ過ぎ",
+      OV:"極端売られ過ぎ＋出来高",
+      RD:"Regular強気DIV",
+      HD:"Hidden強気DIV",
+      O8:"RCI極端売られ過ぎ",
+      O6:"RCI売られ過ぎ",
+      NONE:"反転型未成立"
+    }[code]||"反転型未成立";
+  }
+
+  function archetypeFamily(code){
+    if(["RDOV","RDO","RDS","RD"].includes(code)) return "regular";
+    if(["HDT","HDO","HD"].includes(code)) return "hidden";
+    if(["OV","O8","O6"].includes(code)) return "oversold";
+    if(code==="M2O") return "support";
+    return "none";
+  }
+
   function featureFromResult(r){
     // Raw strategy scores deliberately exclude empirical calibration
     // so historical samples never learn from their own future outcomes.
     const rawTrend=trendPriority(r,null).score;
     const rawReversal=reversalPriority(r,null).score;
+    const arch=reversalArchetype(r);
     return {
       m:r.historyMode==="short"?"S":"F",
       ta:round1(r.score),
@@ -2061,30 +2155,59 @@
       sp:r.stage?.label||"",
       ts:round1(rawTrend),
       rs:round1(rawReversal),
+      ra:arch.code,
+      rf:arch.family,
       cm:conditionMask(calibrationConditions(r))
     };
   }
 
   function summarizeCompact(rows){
-    if(!rows.length) return {n:0,winRate:0,avgReturn:0,medianReturn:0,tpRate:0,slRate:0,avgMfe:0,avgMae:0};
+    if(!rows.length) return {
+      n:0,winRate:0,avgReturn:0,medianReturn:0,
+      tpRate:0,slRate:0,firstTPRate:0,firstSLRate:0,bothRate:0,
+      hit2RRate:0,touchSLRate:0,avgMfe:0,avgMae:0,
+      avgWin:0,avgLoss:0,payoffRatio:0
+    };
 
     const rets=rows.map(x=>x.fr);
     const sorted=[...rets].sort((a,b)=>a-b);
     const mid=Math.floor(sorted.length/2);
     const med=sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2;
+
     const resolved=rows.filter(x=>x.fh==="T"||x.fh==="L");
     const tp=resolved.filter(x=>x.fh==="T").length;
     const sl=resolved.filter(x=>x.fh==="L").length;
+    const firstTP=rows.filter(x=>x.fh==="T").length;
+    const firstSL=rows.filter(x=>x.fh==="L").length;
+    const both=rows.filter(x=>x.fh==="B").length;
+    const hit2=rows.filter(x=>x.h2===1).length;
+    const touchSL=rows.filter(x=>x.hs===1).length;
+
+    const wins=rets.filter(x=>x>0);
+    const losses=rets.filter(x=>x<0);
+    const avgWin=wins.length?wins.reduce((a,b)=>a+b,0)/wins.length:0;
+    const avgLoss=losses.length?losses.reduce((a,b)=>a+b,0)/losses.length:0;
+    const payoff=avgLoss<0?avgWin/Math.abs(avgLoss):0;
 
     return {
       n:rows.length,
       winRate:round1(rows.filter(x=>x.fr>0).length/rows.length*100),
       avgReturn:round1(rets.reduce((a,b)=>a+b,0)/rows.length),
       medianReturn:round1(med),
+      // Legacy conditional first-hit rates retained for the empirical score.
       tpRate:round1(resolved.length?tp/resolved.length*100:0),
       slRate:round1(resolved.length?sl/resolved.length*100:0),
+      // User-facing rates use all samples as denominator.
+      firstTPRate:round1(firstTP/rows.length*100),
+      firstSLRate:round1(firstSL/rows.length*100),
+      bothRate:round1(both/rows.length*100),
+      hit2RRate:round1(hit2/rows.length*100),
+      touchSLRate:round1(touchSL/rows.length*100),
       avgMfe:round1(rows.reduce((a,x)=>a+x.mf,0)/rows.length),
-      avgMae:round1(rows.reduce((a,x)=>a+x.ma,0)/rows.length)
+      avgMae:round1(rows.reduce((a,x)=>a+x.ma,0)/rows.length),
+      avgWin:round1(avgWin),
+      avgLoss:round1(avgLoss),
+      payoffRatio:round1(payoff)
     };
   }
 
@@ -2127,10 +2250,12 @@
           s:symbol,
           m:f.m, ta:f.ta, t:f.t, r:f.r, db:f.db, et:f.et,
           su:f.su, tr:f.tr, ex:f.ex, cx:f.cx, rk:f.rk, sl:f.sl,
-          vr:f.vr, sg:f.sg, sp:f.sp, ts:f.ts, rs:f.rs, cm:f.cm,
+          vr:f.vr, sg:f.sg, sp:f.sp, ts:f.ts, rs:f.rs, ra:f.ra, rf:f.rf, cm:f.cm,
           fr:round1((future-entry)/entry*100),
           mf:round1((maxHigh-entry)/entry*100),
           ma:round1((minLow-entry)/entry*100),
+          h2:maxHigh>=target2R?1:0,
+          hs:minLow<=stop?1:0,
           fh:firstHit
         });
       }catch{}
@@ -2202,6 +2327,12 @@
     }else{
       // Reversal calibration intentionally emphasizes divergence,
       // oversold state, volume, stage and tactical invalidation.
+      // Archetype is used as a structural similarity signal, not as a
+      // substitute for the continuous inputs below.
+      if((sample.ra||"NONE")===(f.ra||"NONE")) d-=0.55;
+      else if(archetypeFamily(sample.ra||"NONE")===archetypeFamily(f.ra||"NONE")) d+=0.12;
+      else d+=0.65;
+
       d+=Math.min(Math.abs(sample.db-f.db)/35,2.5)*1.55;
       d+=Math.min(Math.abs(sample.r-f.r)/35,2.5)*1.25;
       d+=Math.min(Math.abs(sample.tr-f.tr)/20,2.0)*0.55;
@@ -2221,7 +2352,7 @@
       d+=(1-conditionSimilarity(sample.cm,f.cm))*0.35;
     }
 
-    return d;
+    return Math.max(0,d);
   }
 
   function strategySampleSimilarity(sample,f,strategy){
@@ -2230,7 +2361,7 @@
 
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.20"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.21"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2363,7 +2494,7 @@
 
   function strategyHistoricalSet(r,symbol,strategy){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.20"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.21"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2382,12 +2513,38 @@
     const usedStrategyPool=strategyPool.length>=20;
     if(usedStrategyPool) candidates=strategyPool;
 
+    let archetypeMode="none";
+    let exactArchetypeCount=0;
+    let familyArchetypeCount=0;
+
+    if(strategy==="reversal"&&(f.ra||"NONE")!=="NONE"){
+      const exact=candidates.filter(x=>(x.ra||"NONE")===(f.ra||"NONE"));
+      const family=candidates.filter(x=>archetypeFamily(x.ra||"NONE")===archetypeFamily(f.ra||"NONE"));
+      exactArchetypeCount=exact.length;
+      familyArchetypeCount=family.length;
+
+      // Exact archetype is preferred when it can satisfy the publication gate.
+      // Otherwise use the same family if it is sufficiently populated.
+      if(exact.length>=15){
+        candidates=exact;
+        archetypeMode="exact";
+      }else if(family.length>=20){
+        candidates=family;
+        archetypeMode="family";
+      }else{
+        archetypeMode="soft";
+      }
+    }
+
     if(!candidates.length){
       return {
         strategy,referenceOut:true,
         reason:f.m==="S"?"他銘柄の短期モード比較データがありません":"戦略別比較候補がありません",
         stats:null,empiricalScore:null,selectedCount:0,candidateCount:0,
         totalModeCandidates,strategyPoolCount,symbols:0,avgSimilarity:0,
+        archetype:strategy==="reversal"?(f.ra||"NONE"):null,
+        archetypeLabel:strategy==="reversal"?archetypeLabel(f.ra||"NONE"):null,
+        archetypeMode:"none",exactArchetypeCount:0,familyArchetypeCount:0,
         quality:{label:"参考外",cls:"cal-low",weight:0}
       };
     }
@@ -2462,6 +2619,11 @@
       totalModeCandidates,
       strategyPoolCount,
       usedStrategyPool,
+      archetype:strategy==="reversal"?(f.ra||"NONE"):null,
+      archetypeLabel:strategy==="reversal"?archetypeLabel(f.ra||"NONE"):null,
+      archetypeMode,
+      exactArchetypeCount,
+      familyArchetypeCount,
       publishable,
       referenceOut:!publishable,
       reason:publishable
@@ -2487,7 +2649,7 @@
     btn.disabled=true;
     btn.textContent="計算中";
     $("calibrationResults").innerHTML="";
-    $("calProgress").textContent="Strategy Calibration 3.0 を開始します…";
+    $("calProgress").textContent="Strategy Calibration 3.1 を開始します…";
 
     const allRows=[];
     const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=55);
@@ -2535,7 +2697,7 @@
     });
 
     const calibration={
-      version:"v0.20",
+      version:"v0.21",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
@@ -2632,14 +2794,16 @@
     const box=$("calibrationResults");
     if(!box) return;
 
-    if(!calibration||calibration.version!=="v0.20"){
-      box.innerHTML=`<div class="bt-note">Strategy Calibration 3.0は未実行です。「類似校正」を押してください。</div>`;
+    if(!calibration||calibration.version!=="v0.21"){
+      box.innerHTML=`<div class="bt-note">Strategy Calibration 3.1は未実行です。「類似校正」を押してください。</div>`;
       return;
     }
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.0では、短期/フル履歴に加えて順張り/反転を分離します。
+        Strategy Calibration 3.1では、短期/フル履歴と順張り/反転に加え、
+        反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
+        同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
         反転は強気DIV・RCI売られ過ぎ・出来高・Stage 3/4・Tactical Riskを重視して類似局面を検索します。
         評価対象銘柄自身の過去データは検索から除外します。
@@ -2654,6 +2818,7 @@
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
         長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。<br>
         類似実績Scoreの表示条件：類似15件以上・3銘柄以上・平均類似度55%以上。
+        2R先着率/SL先着率は全サンプルを分母にし、同日中に両方へ到達した曖昧ケースはどちらにも加算しません。
         条件未達は「参考外」とし、数値Scoreを表示しません。<br>
         信頼度：A=かなり信頼 / B=参考価値高 / C=参考程度 / —=参考外。
       </div>`;
@@ -2780,6 +2945,7 @@
     const oversold=clamp((-r.r9-40)/45,0,1);
     const vol=clamp((r.volumeRatio-.8)/1.0,0,1);
     const grade=empiricalTrustGrade(emp);
+    const arch=reversalArchetype(r);
 
     let score=22;
     score+=bullDiv*0.23;
@@ -2825,6 +2991,7 @@
     else if(Math.round(score)>=58) label="反転監視";
 
     const reasons=[];
+    if(arch.code!=="NONE") reasons.push(arch.label);
     if(bullDiv>=70) reasons.push(`強気DIV ${Math.round(bullDiv)}`);
     else if(bullDiv>=55) reasons.push("強気DIV");
     else reasons.push("DIV待ち");
@@ -2840,7 +3007,7 @@
     if(tacticalSL<=10) reasons.push("T-SL良好");
     caps.forEach(c=>reasons.push(`上限:${c.reason}`));
 
-    return {score,label,grade,reasons,caps,type:"reversal",bullDiv,empirical:emp};
+    return {score,label,grade,reasons,caps,type:"reversal",bullDiv,archetype:arch,empirical:emp};
   }
 
   function entryPriority(r,empBundle){
@@ -2867,15 +3034,35 @@
 
   function strategyEmpiricalText(emp){
     if(!emp) return `<div class="strategy-emp out">戦略実績：未校正</div>`;
+
+    const arch=emp.strategy==="reversal"&&emp.archetypeLabel
+      ? `<div class="archetype-chip">${esc(emp.archetypeLabel)}${emp.archetypeMode==="exact"?"・同型":emp.archetypeMode==="family"?"・同系統":""}</div>`
+      : "";
+
     if(emp.referenceOut||emp.empiricalScore==null){
-      return `<div class="strategy-emp out">戦略実績：参考外 / ${esc(emp.reason||"比較データ不足")} / 類似 ${emp.selectedCount||0}/${emp.candidateCount||0}</div>`;
+      return `<div class="strategy-emp out">
+        戦略実績：参考外 / ${esc(emp.reason||"比較データ不足")} /
+        類似 ${emp.selectedCount||0}/${emp.candidateCount||0}
+        ${arch}
+      </div>`;
     }
+
     const g=empiricalTrustGrade(emp);
+    const s=emp.stats;
     return `<div class="strategy-emp good">
       戦略実績 <strong>${emp.empiricalScore.toFixed(0)}</strong> ${g.grade} /
-      20D勝率 <strong>${emp.stats.winRate.toFixed(0)}%</strong> /
-      平均 <strong>${emp.stats.avgReturn>=0?"+":""}${emp.stats.avgReturn.toFixed(1)}%</strong> /
-      n=${emp.stats.n}
+      20D勝率 <strong>${s.winRate.toFixed(0)}%</strong> /
+      平均 <strong>${s.avgReturn>=0?"+":""}${s.avgReturn.toFixed(1)}%</strong> /
+      n=${s.n}
+      ${arch}
+      <div class="strategy-stat-grid">
+        <div class="strategy-stat good">中央値 <strong>${s.medianReturn>=0?"+":""}${s.medianReturn.toFixed(1)}%</strong></div>
+        <div class="strategy-stat good">平均MFE <strong>+${Math.max(0,s.avgMfe).toFixed(1)}%</strong></div>
+        <div class="strategy-stat bad">平均MAE <strong>${s.avgMae.toFixed(1)}%</strong></div>
+        <div class="strategy-stat">2R先着 <strong>${s.firstTPRate.toFixed(0)}%</strong></div>
+        <div class="strategy-stat">SL先着 <strong>${s.firstSLRate.toFixed(0)}%</strong></div>
+        <div class="strategy-stat">2R到達 <strong>${s.hit2RRate.toFixed(0)}%</strong></div>
+      </div>
     </div>`;
   }
 
@@ -3343,7 +3530,7 @@
           ${pr.label}
         </div>`;
 
-        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Strategy Calibration 3.0</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Strategy Calibration 3.1</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
 
         if(emp.referenceOut){
           return prBlock+`<div class="empirical">
