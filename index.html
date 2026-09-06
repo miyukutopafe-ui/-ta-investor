@@ -429,6 +429,14 @@
     .trigger-side{padding:9px;border-radius:11px;background:var(--card2);border:1px solid var(--line)}
     .trigger-side .k{font-size:9px;color:var(--muted)}
     .trigger-side .v{font-size:15px;font-weight:900;margin-top:2px}
+    .strategy-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+    .strategy-card{padding:11px;border-radius:13px;background:var(--card2);border:1px solid var(--line)}
+    .strategy-card.best{border-color:rgba(74,216,255,.35);background:rgba(74,216,255,.055)}
+    .strategy-card .k{font-size:9px;color:var(--muted);font-weight:800}
+    .strategy-card .v{font-size:25px;font-weight:950;line-height:1;margin-top:4px}
+    .strategy-card .label{font-size:10px;font-weight:900;margin-top:5px}
+    .strategy-card .reason{font-size:8px;color:var(--muted);line-height:1.4;margin-top:6px}
+    .strategy-summary{margin-top:8px;padding:9px 11px;border-radius:11px;background:rgba(104,227,193,.05);border:1px solid rgba(104,227,193,.13);font-size:9px;color:var(--muted);line-height:1.45}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -475,7 +483,7 @@
         <div class="screen-head">
           <div class="grow">
             <h2>スクリーナー</h2>
-            <p>Timing＝今のシグナル完成度、類似実績＝似た過去局面、総合優先度＝両者を信頼度付きで統合した監視順位です。</p>
+            <p>Timing＝今のシグナル完成度。順張り優先度はStage 2系、反転優先度は売られ過ぎ＋強気DIV系を別々に評価します。</p>
           </div>
           <button class="secondary" id="scanRefreshBtn">再計算</button>
         </div>
@@ -501,7 +509,9 @@
             <option value="52low">52週安値に近い順</option>
             <option value="empirical">類似20D勝率順</option>
             <option value="escore">類似実績Score順</option>
-            <option value="priority">総合優先度順</option>
+            <option value="priority">推奨優先度順</option>
+            <option value="trendPriority">順張り優先度順</option>
+            <option value="reversalPriority">反転優先度順</option>
           </select>
         </div>
 
@@ -647,11 +657,11 @@
     },
     set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
     get calibration() {
-      try { return JSON.parse(localStorage.getItem("ta_calibration_v018")) || null; } catch { return null; }
+      try { return JSON.parse(localStorage.getItem("ta_calibration_v019")) || null; } catch { return null; }
     },
     set calibration(v) {
-      if(v==null) localStorage.removeItem("ta_calibration_v018");
-      else localStorage.setItem("ta_calibration_v018", JSON.stringify(v));
+      if(v==null) localStorage.removeItem("ta_calibration_v019");
+      else localStorage.setItem("ta_calibration_v019", JSON.stringify(v));
     }
   };
 
@@ -990,20 +1000,55 @@
       const breakout=latest.close>prior13High*1.005;
       const recentTouch30=weeks.slice(-5).some(w=>w.low<=ma30*1.04&&w.high>=ma30*.98);
 
+      // Was this already a Stage-2-like structure eight weeks ago?
+      let establishedTrend=false;
+      if(weeks.length>=42){
+        const oldCloses=closes.slice(0,-8);
+        const oldMa30=sma(oldCloses,30);
+        const oldMa10=sma(oldCloses,10);
+        const oldClose=weeks[weeks.length-9].close;
+        if(oldMa30!=null&&oldMa10!=null){
+          establishedTrend=oldClose>oldMa30&&oldMa10>oldMa30;
+        }
+      }
+
+      // Count weeks since price most recently crossed from below to above 30-week MA.
+      let weeksSinceCross=null;
+      for(let back=1;back<=Math.min(16,weeks.length-31);back++){
+        const idx=weeks.length-back;
+        const nowSlice=closes.slice(0,idx+1);
+        const prevSlice=closes.slice(0,idx);
+        const nowMa=sma(nowSlice,30);
+        const prevMa=sma(prevSlice,30);
+        if(nowMa==null||prevMa==null) continue;
+        const nowClose=weeks[idx].close;
+        const prevClose=weeks[idx-1].close;
+        if(nowClose>nowMa&&prevClose<=prevMa){
+          weeksSinceCross=back-1;
+          break;
+        }
+      }
+
       let code=1,label="Stage 1",phase="底固め",reason="30週線付近で横ばい";
       if(latest.close<ma30&&slope30<-1&&ma10<ma30){
         code=4;label="Stage 4";phase="下降トレンド";
         reason=`株価<30週線 / 30週線傾き ${slope30.toFixed(1)}% / 10週線<30週線`;
       }else if(latest.close>ma30&&slope30>0.8&&ma10>ma30){
         code=2;
-        if(breakout||recentTouch30){
-          label="Stage 2 前半";phase="上昇初期";
-          reason=breakout?"13週高値ブレイク + 上向き30週線":"30週線サポート + 上向きトレンド";
-        }else if(nearHigh&&slope10<0){
-          label="Stage 2 後半";phase="上昇成熟";
-          reason="30週線は上向きだが短期モメンタム鈍化";
+
+        if(!establishedTrend&&weeksSinceCross!=null&&weeksSinceCross<=6){
+          label="Stage 2 初動";phase="上昇開始";
+          reason=`30週線上抜けから${weeksSinceCross}週 / 10週線>30週線`;
+        }else if(establishedTrend&&(breakout||recentTouch30)){
+          label="Stage 2 再加速";phase="押し目後の再上昇";
+          reason=breakout
+            ?"既存上昇トレンドから13週高値を再ブレイク"
+            :"既存上昇トレンドで30週線サポート後に再上昇";
+        }else if((dist30>=22&&nearHigh)||(nearHigh&&slope10<0)){
+          label="Stage 2 成熟";phase="上昇成熟";
+          reason=`30週線乖離 ${dist30.toFixed(1)}% / 高値圏で成熟を警戒`;
         }else{
-          label="Stage 2";phase="上昇トレンド";
+          label="Stage 2 継続";phase="上昇トレンド継続";
           reason=`株価>30週線 / 30週線傾き +${slope30.toFixed(1)}% / 10週線>30週線`;
         }
       }else if(nearHigh&&latest.close>=ma30*.97&&(slope30<=0.8||slope10<0)){
@@ -1027,11 +1072,13 @@
         weeklyCount:weeks.length,
         ma30:round2(ma30),
         ma10w:round2(ma10),
-        slope30:round1(slope30)
+        slope30:round1(slope30),
+        dist30:round1(dist30),
+        establishedTrend,
+        weeksSinceCross
       };
     }
 
-    // Short-history provisional stage using daily 20/40-day averages.
     const ma20=sma(dailyCloses,20);
     const ma40=sma(dailyCloses,40);
     const prev40=candles.length>=50?sma(dailyCloses.slice(0,-10),40):null;
@@ -1056,9 +1103,13 @@
       weeklyCount:weeks.length,
       ma30:null,
       ma10w:null,
-      slope30:round1(slope40)
+      slope30:round1(slope40),
+      dist30:null,
+      establishedTrend:false,
+      weeksSinceCross:null
     };
   }
+
 
   function evaluateTA(symbol,candles){
     if(candles.length<35) throw new Error(`日足が不足しています（${candles.length}本）。最低35本必要です。`);
@@ -1980,6 +2031,7 @@
       rk:round1(r.timingBreakdown?.risk||0),
       vr:round1(r.volumeRatio||0),
       sg:r.stage?.code||0,
+      sp:r.stage?.label||"",
       cm:conditionMask(calibrationConditions(r))
     };
   }
@@ -2045,7 +2097,7 @@
         rows.push({
           s:symbol,
           m:f.m, ta:f.ta, t:f.t, r:f.r, db:f.db, et:f.et,
-          su:f.su, tr:f.tr, cx:f.cx, rk:f.rk, vr:f.vr, sg:f.sg, cm:f.cm,
+          su:f.su, tr:f.tr, cx:f.cx, rk:f.rk, vr:f.vr, sg:f.sg, sp:f.sp, cm:f.cm,
           fr:round1((future-entry)/entry*100),
           mf:round1((maxHigh-entry)/entry*100),
           ma:round1((minLow-entry)/entry*100),
@@ -2086,6 +2138,7 @@
 
     if(sample.et!==f.et) d+=0.90;
     if((sample.sg||0)!==(f.sg||0)) d+=0.40;
+    else if((sample.sp||"")!==(f.sp||"")) d+=0.18;
     d+=(1-conditionSimilarity(sample.cm,f.cm))*0.70;
     return d;
   }
@@ -2096,7 +2149,7 @@
 
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.18"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.19"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2268,7 +2321,7 @@
     });
 
     const calibration={
-      version:"v0.18",
+      version:"v0.19",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
@@ -2336,8 +2389,8 @@
     const box=$("calibrationResults");
     if(!box) return;
 
-    if(!calibration||calibration.version!=="v0.18"){
-      box.innerHTML=`<div class="bt-note">Calibration 2.3は未実行です。「類似校正」を押してください。</div>`;
+    if(!calibration||calibration.version!=="v0.19"){
+      box.innerHTML=`<div class="bt-note">Calibration 2.4は未実行です。「類似校正」を押してください。</div>`;
       return;
     }
 
@@ -2382,7 +2435,16 @@
     return {grade:"C",cls:"grade-c",label:"参考程度",weight:.65};
   }
 
-  function entryPriority(r,emp){
+  function scoreLabel(score){
+    const display=Math.round(score);
+    if(display>=78) return "最優先";
+    if(display>=68) return "優先監視";
+    if(display>=58) return "監視";
+    if(display>=48) return "待ち";
+    return "見送り";
+  }
+
+  function trendPriority(r,emp){
     const timing=clamp(Number(r.timingScore)||0,0,100);
     const ta=clamp(Number(r.score)||0,0,100);
     const tb=r.timingBreakdown||{};
@@ -2405,20 +2467,23 @@
       score+=(emp.empiricalScore-50)*0.22*grade.weight;
     }
 
-    // Stage adjustment. Provisional stages receive half weight.
     let stageAdj=0;
     if(stage.code===2){
-      stageAdj=stage.label.includes("前半")||stage.label.includes("1→2")?6:4;
+      if(stage.label.includes("初動")) stageAdj=8;
+      else if(stage.label.includes("再加速")) stageAdj=7;
+      else if(stage.label.includes("継続")) stageAdj=4;
+      else if(stage.label.includes("成熟")) stageAdj=0;
+      else if(stage.label.includes("1→2")) stageAdj=6;
+      else stageAdj=3;
     }else if(stage.code===3){
-      stageAdj=-7;
+      stageAdj=-8;
     }else if(stage.code===4){
-      stageAdj=-10;
+      stageAdj=-12;
     }
     if(stage.provisional) stageAdj*=0.5;
     score+=stageAdj;
 
-    // Exhaustion is explicitly bearish / late-cycle information.
-    score-=Math.min(10,exhaustion*0.35);
+    score-=Math.min(11,exhaustion*0.40);
 
     const tacticalSL=Number(tb.entryRiskPct||r.tradePlan?.stopDistancePct||0);
     const caps=[];
@@ -2431,48 +2496,118 @@
       score-=10;
       caps.push({max:49,reason:"Tactical SL≥25%"});
     }
-    if(r.action==="利確警戒"){
-      caps.push({max:49,reason:"利確警戒"});
-    }
-    if(stage.code===4&&!stage.provisional){
-      caps.push({max:59,reason:"Stage 4"});
-    }
+    if(r.action==="利確警戒") caps.push({max:49,reason:"利確警戒"});
+    if(stage.code===4&&!stage.provisional) caps.push({max:54,reason:"Stage 4"});
+    if(stage.code===3&&!stage.provisional) caps.push({max:64,reason:stage.label});
 
-    score=round1(clamp(score,0,100));
+    score=clamp(score,0,100);
     caps.forEach(c=>{ score=Math.min(score,c.max); });
-
-    let label;
-    if(score>=78) label="最優先";
-    else if(score>=68) label="優先監視";
-    else if(score>=58) label="監視";
-    else if(score>=48) label="待ち";
-    else label="見送り";
+    score=round1(score);
 
     const reasons=[];
     if(trigger>=20) reasons.push("Bull Trigger強");
     else if(trigger>=12) reasons.push("Bull Trigger中");
     else reasons.push("Bull Trigger待ち");
-
     if(exhaustion>=12) reasons.push("Exhaustion強");
     else if(exhaustion>=6) reasons.push("Exhaustion注意");
-
     if(emp&&!emp.referenceOut&&emp.empiricalScore!=null){
       if(emp.empiricalScore>=70) reasons.push("類似実績強");
       else if(emp.empiricalScore>=58) reasons.push("類似実績良好");
       else reasons.push("類似実績弱め");
-    }else{
-      reasons.push("類似実績参考外");
-    }
-
-    if(stage.code===2) reasons.push(stage.label);
-    else if(stage.code===3||stage.code===4) reasons.push(stage.label);
-
+    }else reasons.push("類似実績参考外");
+    if(stage.label) reasons.push(stage.label);
     if(ta>=75) reasons.push("TA強");
-    if(risk<=5) reasons.push("Risk不利");
     if(tacticalSL>15) reasons.push("T-SL広め");
     caps.forEach(c=>reasons.push(`上限:${c.reason}`));
 
-    return {score,label,grade,reasons,caps};
+    return {score,label:scoreLabel(score),grade,reasons,caps,type:"trend"};
+  }
+
+  function reversalPriority(r,emp){
+    const tb=r.timingBreakdown||{};
+    const stage=r.stage||{code:0,provisional:true,label:"Stage不明"};
+    const tacticalSL=Number(tb.entryRiskPct||r.tradePlan?.stopDistancePct||0);
+    const trigger=clamp(Number(tb.trigger)||0,0,35);
+    const exhaustion=clamp(Number(tb.exhaustion)||0,0,25);
+    const bullDivs=(r.divergences||[]).filter(d=>d.direction==="bullish"&&d.confirmed);
+    const bullDiv=bullDivs.length?Math.max(...bullDivs.map(d=>d.strength)):0;
+    const oversold=clamp((-r.r9-40)/45,0,1);
+    const vol=clamp((r.volumeRatio-.8)/1.0,0,1);
+    const grade=empiricalTrustGrade(emp);
+
+    let score=22;
+    score+=bullDiv*0.23;
+    score+=oversold*17;
+    score+=vol*8;
+    score+=(trigger/35*100)*0.08;
+
+    if(stage.code===3) score+=10;
+    else if(stage.code===4) score+=8;
+    else if(stage.code===1) score+=5;
+    else if(stage.code===2) score-=5;
+
+    if(tacticalSL<=6) score+=8;
+    else if(tacticalSL<=10) score+=6;
+    else if(tacticalSL<=15) score+=2;
+    else score-=6;
+
+    if(emp&&!emp.referenceOut&&emp.empiricalScore!=null){
+      score+=(emp.empiricalScore-50)*0.10*grade.weight;
+    }
+
+    // Exhaustion can actually coexist with a reversal setup, but very strong
+    // bearish exhaustion still requires confirmation.
+    if(exhaustion>=16) score-=4;
+
+    const caps=[];
+    if(bullDiv<55){
+      caps.push({max:59,reason:"強気DIV未確認"});
+    }
+    if(r.r9>-35&&bullDiv<70){
+      caps.push({max:54,reason:"売られ過ぎ不足"});
+    }
+    if(tacticalSL>=20){
+      caps.push({max:49,reason:"Tactical SL≥20%"});
+    }
+
+    score=clamp(score,0,100);
+    caps.forEach(c=>{ score=Math.min(score,c.max); });
+    score=round1(score);
+
+    let label=scoreLabel(score);
+    if(Math.round(score)>=68) label="反転優先";
+    else if(Math.round(score)>=58) label="反転監視";
+
+    const reasons=[];
+    if(bullDiv>=70) reasons.push(`強気DIV ${Math.round(bullDiv)}`);
+    else if(bullDiv>=55) reasons.push("強気DIV");
+    else reasons.push("DIV待ち");
+    if(r.r9<=-80) reasons.push("RCI売られ過ぎ");
+    else if(r.r9<=-60) reasons.push("RCI低位");
+    if(r.volumeRatio>=1.3) reasons.push("出来高増");
+    if(stage.code===3||stage.code===4) reasons.push(stage.label);
+    if(tacticalSL<=10) reasons.push("T-SL良好");
+    caps.forEach(c=>reasons.push(`上限:${c.reason}`));
+
+    return {score,label,grade,reasons,caps,type:"reversal",bullDiv};
+  }
+
+  function entryPriority(r,emp){
+    const trend=trendPriority(r,emp);
+    const reversal=reversalPriority(r,emp);
+    const best=reversal.score>trend.score?reversal:trend;
+    const bestName=best.type==="reversal"?"反転":"順張り";
+    return {
+      score:best.score,
+      label:best.label,
+      grade:best.grade,
+      reasons:best.reasons,
+      caps:best.caps,
+      type:best.type,
+      strategyName:bestName,
+      trend,
+      reversal
+    };
   }
 
   // ---------- Rendering ----------
@@ -2566,6 +2701,10 @@
                - ((a.empirical&&!a.empirical.referenceOut&&a.empirical.empiricalScore!=null)?a.empirical.empiricalScore:-1);
         case "priority":
           return (b.priority?.score??-1)-(a.priority?.score??-1);
+        case "trendPriority":
+          return (b.priority?.trend?.score??-1)-(a.priority?.trend?.score??-1);
+        case "reversalPriority":
+          return (b.priority?.reversal?.score??-1)-(a.priority?.reversal?.score??-1);
         default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
       }
     });
@@ -2649,18 +2788,24 @@
           </div>
         </div>
 
-        <div class="priority-card">
-          <div class="priority-top">
-            <div>
-              <div class="priority-title">総合エントリー優先度</div>
-              <div class="priority-label">${x.priority.label}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span class="grade-badge ${x.priority.grade.cls}">${x.priority.grade.grade}</span>
-              <div class="priority-score">${Math.round(x.priority.score)}</div>
-            </div>
+        <div class="strategy-grid">
+          <div class="strategy-card ${x.priority.type==="trend"?"best":""}">
+            <div class="k">順張り優先度</div>
+            <div class="v">${Math.round(x.priority.trend.score)}</div>
+            <div class="label">${x.priority.trend.label}</div>
+            <div class="reason">${x.priority.trend.reasons.slice(0,4).join(" / ")}</div>
           </div>
-          <div class="priority-reason">${x.priority.reasons.join(" / ")}</div>
+          <div class="strategy-card ${x.priority.type==="reversal"?"best":""}">
+            <div class="k">反転優先度</div>
+            <div class="v">${Math.round(x.priority.reversal.score)}</div>
+            <div class="label">${x.priority.reversal.label}</div>
+            <div class="reason">${x.priority.reversal.reasons.slice(0,4).join(" / ")}</div>
+          </div>
+        </div>
+        <div class="strategy-summary">
+          推奨戦略：<strong>${x.priority.strategyName}</strong> /
+          優先度 <strong>${Math.round(x.priority.score)}</strong> /
+          ${x.priority.label}
         </div>
 
         <div class="mini-grid">
@@ -2896,21 +3041,27 @@
       ${(()=>{
         const emp=empiricalForResult(r,symbol);
         const pr=entryPriority(r,emp);
-        const prBlock=`<div class="priority-card">
-          <div class="priority-top">
-            <div>
-              <div class="priority-title">総合エントリー優先度</div>
-              <div class="priority-label">${pr.label}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span class="grade-badge ${pr.grade.cls}">${pr.grade.grade}</span>
-              <div class="priority-score">${Math.round(pr.score)}</div>
-            </div>
+        const prBlock=`<div class="strategy-grid">
+          <div class="strategy-card ${pr.type==="trend"?"best":""}">
+            <div class="k">順張り優先度</div>
+            <div class="v">${Math.round(pr.trend.score)}</div>
+            <div class="label">${pr.trend.label}</div>
+            <div class="reason">${pr.trend.reasons.slice(0,5).join(" / ")}</div>
           </div>
-          <div class="priority-reason">${pr.reasons.join(" / ")}</div>
+          <div class="strategy-card ${pr.type==="reversal"?"best":""}">
+            <div class="k">反転優先度</div>
+            <div class="v">${Math.round(pr.reversal.score)}</div>
+            <div class="label">${pr.reversal.label}</div>
+            <div class="reason">${pr.reversal.reasons.slice(0,5).join(" / ")}</div>
+          </div>
+        </div>
+        <div class="strategy-summary">
+          推奨戦略：<strong>${pr.strategyName}</strong> /
+          優先度 <strong>${Math.round(pr.score)}</strong> /
+          ${pr.label}
         </div>`;
 
-        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Calibration 2.3</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Calibration 2.4</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
 
         if(emp.referenceOut){
           return prBlock+`<div class="empirical">
