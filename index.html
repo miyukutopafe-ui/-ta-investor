@@ -242,6 +242,40 @@
     .list-range{color:var(--muted);font-size:10px;margin-top:5px}
     .list-range strong{color:var(--text);font-weight:800}
     .screen-range{color:var(--muted);font-size:9px;margin-top:5px}
+    .bt-card {
+      background:var(--card); border:1px solid var(--line); border-radius:20px;
+      padding:16px; margin:12px 0; box-shadow:var(--shadow);
+    }
+    .bt-card h3 { margin:0 0 6px; font-size:15px; }
+    .bt-sub { color:var(--muted); font-size:10px; line-height:1.5; margin-bottom:12px; }
+    .bt-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px; }
+    .bt-select, .bt-date {
+      width:100%; border:1px solid var(--line); border-radius:11px;
+      padding:9px 10px; background:var(--card2); color:var(--text); font-size:11px; outline:none;
+    }
+    .bt-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px; }
+    .bt-box { background:var(--card2); border-radius:12px; padding:10px; }
+    .bt-box .k { color:var(--muted); font-size:9px; }
+    .bt-box .v { font-size:18px; font-weight:900; margin-top:3px; }
+    .bt-good { color:var(--green); }
+    .bt-bad { color:var(--red); }
+    .bt-mid { color:var(--yellow); }
+    .bt-list { display:grid; gap:7px; margin-top:12px; }
+    .bt-row {
+      display:grid; grid-template-columns:78px 46px 46px 1fr 1fr; gap:6px;
+      align-items:center; padding:9px 8px; background:var(--card2); border-radius:10px;
+      font-size:10px;
+    }
+    .bt-row.head { color:var(--muted); background:transparent; padding:0 8px; }
+    .bt-row .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .bt-note {
+      margin-top:10px; padding:10px; border-radius:12px; background:rgba(74,216,255,.07);
+      border:1px solid rgba(74,216,255,.16); color:#cdeefa; font-size:10px; line-height:1.55;
+    }
+    .bt-date-result {
+      margin-top:10px; padding:12px; background:var(--card2); border-radius:12px;
+    }
+    .bt-date-title { font-weight:900; font-size:13px; margin-bottom:7px; }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -353,6 +387,36 @@
       </div>
 
       <div class="range-card" id="range52Card"></div>
+      <div class="bt-card" id="backtestCard">
+        <h3>バックテスト</h3>
+        <div class="bt-sub">当時までのデータだけで現在と同じロジックを再計算し、その後の値動きを検証します。</div>
+
+        <div class="bt-controls">
+          <select id="btHorizon" class="bt-select">
+            <option value="5">5営業日後</option>
+            <option value="10">10営業日後</option>
+            <option value="20" selected>20営業日後</option>
+            <option value="40">40営業日後</option>
+          </select>
+          <select id="btMatchMode" class="bt-select">
+            <option value="score">TA ±5</option>
+            <option value="scoreTiming">TA ±5 + Timing ±10</option>
+            <option value="action">TA ±5 + 同じ判定</option>
+          </select>
+        </div>
+
+        <button class="primary" id="runBacktestBtn" style="width:100%;">現在スコアをバックテスト</button>
+        <div id="btSummary"></div>
+
+        <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px;">
+          <div class="small muted" style="margin-bottom:7px;">任意の日付を検証</div>
+          <div class="row">
+            <input id="btDateInput" class="bt-date" type="date">
+            <button class="secondary" id="btDateBtn">検証</button>
+          </div>
+          <div id="btDateResult"></div>
+        </div>
+      </div>
       <div class="card" id="divergenceCard"></div>
       <div class="card" id="levelsCard"></div>
       <div class="card" id="reasonsCard"></div>
@@ -933,6 +997,164 @@
     if(listMode==="screen") renderScreener();
   }
 
+
+  function backtestSnapshots(symbol,candles,horizon){
+    const rows=[];
+    const minBars=35;
+    const end=candles.length-1-horizon;
+    if(end<minBars-1) return rows;
+
+    for(let i=minBars-1;i<=end;i++){
+      try{
+        const historical=candles.slice(0,i+1);
+        const r=evaluateTA(symbol,historical);
+        const entry=candles[i].close;
+        const future=candles[i+horizon].close;
+        const futureSlice=candles.slice(i+1,i+horizon+1);
+        const maxHigh=futureSlice.length?Math.max(...futureSlice.map(c=>c.high)):future;
+        const minLow=futureSlice.length?Math.min(...futureSlice.map(c=>c.low)):future;
+
+        rows.push({
+          index:i,
+          date:candles[i].date,
+          score:r.score,
+          timing:r.timingScore,
+          action:r.action,
+          rci9:r.r9,
+          divBull:r.divergences.filter(d=>d.direction==="bullish").reduce((m,d)=>Math.max(m,d.strength),0),
+          entry,
+          forwardReturn:round1((future-entry)/entry*100),
+          mfe:round1((maxHigh-entry)/entry*100),
+          mae:round1((minLow-entry)/entry*100)
+        });
+      }catch{}
+    }
+    return rows;
+  }
+
+  function filterBacktestMatches(rows,current,mode){
+    return rows.filter(x=>{
+      const scoreOk=Math.abs(x.score-current.score)<=5;
+      if(!scoreOk) return false;
+      if(mode==="scoreTiming") return Math.abs(x.timing-current.timingScore)<=10;
+      if(mode==="action") return x.action===current.action;
+      return true;
+    });
+  }
+
+  function median(values){
+    if(!values.length) return 0;
+    const a=[...values].sort((x,y)=>x-y);
+    const m=Math.floor(a.length/2);
+    return a.length%2?a[m]:(a[m-1]+a[m])/2;
+  }
+
+  function avg(values){
+    return values.length?values.reduce((a,b)=>a+b,0)/values.length:0;
+  }
+
+  function winRate(rows){
+    return rows.length?rows.filter(x=>x.forwardReturn>0).length/rows.length*100:0;
+  }
+
+  function sampleQuality(n){
+    if(n>=30) return {label:"比較的十分",cls:"bt-good"};
+    if(n>=15) return {label:"参考可能",cls:"bt-mid"};
+    return {label:"少ない",cls:"bt-bad"};
+  }
+
+  function renderBacktest(symbol,candles,current){
+    const horizon=Number($("btHorizon").value||20);
+    const mode=$("btMatchMode").value||"score";
+    const all=backtestSnapshots(symbol,candles,horizon);
+    const matches=filterBacktestMatches(all,current,mode);
+    const quality=sampleQuality(matches.length);
+
+    if(!matches.length){
+      $("btSummary").innerHTML=`<div class="bt-note">一致する過去局面がありません。条件を「TA ±5」に広げるか、履歴が増えてから再検証してください。</div>`;
+      return;
+    }
+
+    const returns=matches.map(x=>x.forwardReturn);
+    const mfes=matches.map(x=>x.mfe);
+    const maes=matches.map(x=>x.mae);
+    const wr=winRate(matches);
+    const avgRet=avg(returns);
+    const medRet=median(returns);
+    const avgMfe=avg(mfes);
+    const avgMae=avg(maes);
+
+    const sortedRecent=[...matches].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,12);
+
+    $("btSummary").innerHTML=`
+      <div class="bt-grid">
+        <div class="bt-box"><div class="k">一致サンプル</div><div class="v">${matches.length}</div></div>
+        <div class="bt-box"><div class="k">サンプル評価</div><div class="v ${quality.cls}" style="font-size:14px;">${quality.label}</div></div>
+        <div class="bt-box"><div class="k">${horizon}日後プラス率</div><div class="v ${wr>=60?"bt-good":wr<45?"bt-bad":"bt-mid"}">${wr.toFixed(0)}%</div></div>
+        <div class="bt-box"><div class="k">平均リターン</div><div class="v ${avgRet>=0?"bt-good":"bt-bad"}">${avgRet>=0?"+":""}${avgRet.toFixed(1)}%</div></div>
+        <div class="bt-box"><div class="k">中央値</div><div class="v ${medRet>=0?"bt-good":"bt-bad"}">${medRet>=0?"+":""}${medRet.toFixed(1)}%</div></div>
+        <div class="bt-box"><div class="k">平均MFE</div><div class="v bt-good">+${avgMfe.toFixed(1)}%</div></div>
+        <div class="bt-box"><div class="k">平均MAE</div><div class="v bt-bad">${avgMae.toFixed(1)}%</div></div>
+        <div class="bt-box"><div class="k">現在</div><div class="v" style="font-size:13px;">TA ${Math.round(current.score)} / T ${Math.round(current.timingScore)}</div></div>
+      </div>
+
+      <div class="bt-note">
+        判定日より後のデータはスコア計算に使っていません。<br>
+        「プラス率」は${horizon}営業日後の終値が判定日の終値を上回った割合です。
+        MFE/MAEはその期間中の最大上昇率/最大下落率です。
+      </div>
+
+      <div class="bt-list">
+        <div class="bt-row head"><div>日付</div><div class="num">TA</div><div class="num">T</div><div class="num">${horizon}D</div><div class="num">MFE/MAE</div></div>
+        ${sortedRecent.map(x=>`
+          <div class="bt-row">
+            <div>${x.date}</div>
+            <div class="num">${Math.round(x.score)}</div>
+            <div class="num">${Math.round(x.timing)}</div>
+            <div class="num ${x.forwardReturn>=0?"bt-good":"bt-bad"}">${x.forwardReturn>=0?"+":""}${x.forwardReturn.toFixed(1)}%</div>
+            <div class="num"><span class="bt-good">+${x.mfe.toFixed(1)}</span>/<span class="bt-bad">${x.mae.toFixed(1)}</span></div>
+          </div>`).join("")}
+      </div>`;
+  }
+
+  function renderDateBacktest(symbol,candles,date){
+    if(!date){
+      $("btDateResult").innerHTML=`<div class="bt-note">日付を選んでください。</div>`;
+      return;
+    }
+    let idx=candles.findIndex(c=>c.date>=date);
+    if(idx<0) idx=candles.length-1;
+    if(idx<34){
+      $("btDateResult").innerHTML=`<div class="bt-note">この日付時点では判定に必要な日足が不足しています。</div>`;
+      return;
+    }
+
+    try{
+      const r=evaluateTA(symbol,candles.slice(0,idx+1));
+      const entry=candles[idx].close;
+      const horizons=[5,10,20,40];
+      const pieces=horizons.map(h=>{
+        if(idx+h>=candles.length) return `<div class="bt-box"><div class="k">${h}D</div><div class="v" style="font-size:13px;">未到達</div></div>`;
+        const ret=(candles[idx+h].close-entry)/entry*100;
+        return `<div class="bt-box"><div class="k">${h}D</div><div class="v ${ret>=0?"bt-good":"bt-bad"}">${ret>=0?"+":""}${ret.toFixed(1)}%</div></div>`;
+      }).join("");
+
+      const currentRet=(candles[candles.length-1].close-entry)/entry*100;
+      $("btDateResult").innerHTML=`
+        <div class="bt-date-result">
+          <div class="bt-date-title">${candles[idx].date} 時点</div>
+          <div class="small muted">終値 ${money(entry)} / TA ${Math.round(r.score)} / Timing ${Math.round(r.timingScore)} / ${esc(r.action)}</div>
+          <div class="bt-grid">
+            ${pieces}
+            <div class="bt-box"><div class="k">現在まで</div><div class="v ${currentRet>=0?"bt-good":"bt-bad"}">${currentRet>=0?"+":""}${currentRet.toFixed(1)}%</div></div>
+            <div class="bt-box"><div class="k">RCI9</div><div class="v">${r.r9.toFixed(1)}</div></div>
+          </div>
+        </div>`;
+    }catch(e){
+      $("btDateResult").innerHTML=`<div class="bt-note">${esc(e.message||String(e))}</div>`;
+    }
+  }
+
   // ---------- Rendering ----------
 
   function screenMetrics(item){
@@ -1306,6 +1528,16 @@
       </div>`).join("");
 
     drawChart(candles,r);
+
+    // Backtest controls are initialized from this symbol's available history.
+    const minDate=candles.length>34?candles[34].date:candles[0].date;
+    const maxDate=candles[candles.length-1].date;
+    $("btDateInput").min=minDate;
+    $("btDateInput").max=maxDate;
+    if(!$("btDateInput").value) $("btDateInput").value=candles[Math.max(34,candles.length-21)].date;
+
+    $("btSummary").innerHTML=`<div class="bt-note">「現在スコアをバックテスト」を押すと、現在と似た過去局面の成績を集計します。</div>`;
+    $("btDateResult").innerHTML="";
   }
 
   function clearChart(){
@@ -1487,6 +1719,32 @@
     $("chartAllBtn").classList.add("active");
     $("chartFocusBtn").classList.remove("active");
     if(currentSymbol && cache[currentSymbol]) renderDetail(currentSymbol);
+  });
+
+  $("runBacktestBtn").addEventListener("click",()=>{
+    if(!currentSymbol) return;
+    const data=cache[currentSymbol];
+    if(!data?.candles) return;
+    try{
+      const current=evaluateTA(currentSymbol,data.candles);
+      renderBacktest(currentSymbol,data.candles,current);
+    }catch(e){
+      $("btSummary").innerHTML=`<div class="bt-note">${esc(e.message||String(e))}</div>`;
+    }
+  });
+
+  $("btHorizon").addEventListener("change",()=>{
+    if($("btSummary").children.length && currentSymbol) $("runBacktestBtn").click();
+  });
+  $("btMatchMode").addEventListener("change",()=>{
+    if($("btSummary").children.length && currentSymbol) $("runBacktestBtn").click();
+  });
+
+  $("btDateBtn").addEventListener("click",()=>{
+    if(!currentSymbol) return;
+    const data=cache[currentSymbol];
+    if(!data?.candles) return;
+    renderDateBacktest(currentSymbol,data.candles,$("btDateInput").value);
   });
 
   $("deleteBtn").addEventListener("click",()=>{
