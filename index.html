@@ -397,6 +397,17 @@
       background:rgba(255,255,255,.035); border:1px dashed rgba(255,255,255,.12);
       color:var(--muted); font-size:9px; line-height:1.45;
     }
+    .priority-card{margin-top:10px;padding:11px 12px;border-radius:13px;background:linear-gradient(135deg,rgba(74,216,255,.08),rgba(104,227,193,.05));border:1px solid rgba(74,216,255,.18)}
+    .priority-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .priority-title{color:var(--muted);font-size:9px;font-weight:800}
+    .priority-score{font-size:26px;font-weight:950;line-height:1}
+    .priority-label{font-size:10px;font-weight:900;margin-top:4px}
+    .priority-reason{color:var(--muted);font-size:9px;line-height:1.45;margin-top:7px}
+    .grade-badge{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:950;border:1px solid var(--line);background:var(--card2)}
+    .grade-a{color:var(--green);border-color:rgba(67,209,123,.32)}
+    .grade-b{color:#8ee8ff;border-color:rgba(74,216,255,.32)}
+    .grade-c{color:var(--yellow);border-color:rgba(242,214,75,.32)}
+    .grade-x{color:var(--muted);border-color:rgba(255,255,255,.12)}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -443,7 +454,7 @@
         <div class="screen-head">
           <div class="grow">
             <h2>スクリーナー</h2>
-            <p>Timing＝今のシグナル完成度、類似実績＝過去に似た局面がどれくらい機能したか。2つを分けて比較します。</p>
+            <p>Timing＝今のシグナル完成度、類似実績＝似た過去局面、総合優先度＝両者を信頼度付きで統合した監視順位です。</p>
           </div>
           <button class="secondary" id="scanRefreshBtn">再計算</button>
         </div>
@@ -469,6 +480,7 @@
             <option value="52low">52週安値に近い順</option>
             <option value="empirical">類似20D勝率順</option>
             <option value="escore">類似実績Score順</option>
+            <option value="priority">総合優先度順</option>
           </select>
         </div>
 
@@ -1818,7 +1830,7 @@
 
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.16"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.17"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -1943,7 +1955,7 @@
           ? `類似サンプル不足（${rows.length}/15）`
           : symbols.length<3
             ? `比較銘柄不足（${symbols.length}/3）`
-            : `平均類似度不足（${avgSimilarity.toFixed(0)}% / 55%）`,
+            : `平均類似度不足（${avgSimilarity.toFixed(1)}% / 55.0%）`,
       totalModeCandidates
     };
   }
@@ -1990,7 +2002,7 @@
     });
 
     const calibration={
-      version:"v0.16",
+      version:"v0.17",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
@@ -2077,12 +2089,79 @@
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
         長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。<br>
         類似実績Scoreの表示条件：類似15件以上・3銘柄以上・平均類似度55%以上。
-        条件未達は「参考外」とし、数値Scoreを表示しません。
+        条件未達は「参考外」とし、数値Scoreを表示しません。<br>
+        信頼度：A=かなり信頼 / B=参考価値高 / C=参考程度 / —=参考外。
       </div>`;
   }
 
   function empiricalForResult(r,symbol=null){
     return similarHistoricalSet(r,symbol);
+  }
+
+
+  function empiricalTrustGrade(emp){
+    if(!emp||emp.referenceOut||emp.empiricalScore==null) return {grade:"—",cls:"grade-x",label:"参考外",weight:0};
+
+    const n=emp.selectedCount||0;
+    const syms=emp.symbols||0;
+    const sim=emp.avgSimilarity||0;
+    const cand=emp.candidateCount||0;
+
+    if(n>=35&&syms>=5&&sim>=65&&cand>=100){
+      return {grade:"A",cls:"grade-a",label:"かなり信頼",weight:1.00};
+    }
+    if(n>=25&&syms>=4&&sim>=60){
+      return {grade:"B",cls:"grade-b",label:"参考価値高",weight:.85};
+    }
+    return {grade:"C",cls:"grade-c",label:"参考程度",weight:.65};
+  }
+
+  function entryPriority(r,emp){
+    const timing=clamp(Number(r.timingScore)||0,0,100);
+    const ta=clamp(Number(r.score)||0,0,100);
+    const tb=r.timingBreakdown||{};
+    const trigger=clamp(Number(tb.trigger)||0,0,35);
+    const context=clamp(Number(tb.context)||0,0,20);
+    const risk=clamp(Number(tb.risk)||0,0,15);
+    const grade=empiricalTrustGrade(emp);
+
+    let score=
+      timing*0.46+
+      ta*0.18+
+      (trigger/35*100)*0.18+
+      (context/20*100)*0.10+
+      (risk/15*100)*0.08;
+
+    if(emp&&!emp.referenceOut&&emp.empiricalScore!=null){
+      score+=(emp.empiricalScore-50)*0.22*grade.weight;
+    }
+    score=round1(clamp(score,0,100));
+
+    let label;
+    if(score>=78) label="最優先";
+    else if(score>=68) label="優先監視";
+    else if(score>=58) label="監視";
+    else if(score>=48) label="待ち";
+    else label="見送り";
+
+    const reasons=[];
+    if(trigger>=20) reasons.push("Trigger強");
+    else if(trigger>=12) reasons.push("Trigger中");
+    else reasons.push("Trigger待ち");
+
+    if(emp&&!emp.referenceOut&&emp.empiricalScore!=null){
+      if(emp.empiricalScore>=70) reasons.push("類似実績強");
+      else if(emp.empiricalScore>=58) reasons.push("類似実績良好");
+      else reasons.push("類似実績弱め");
+    }else{
+      reasons.push("類似実績参考外");
+    }
+
+    if(ta>=75) reasons.push("TA強");
+    if(risk<=5) reasons.push("Risk弱");
+    if((tb.entryRiskPct||0)>15) reasons.push("SL幅広め");
+
+    return {score,label,grade,reasons};
   }
 
   // ---------- Rendering ----------
@@ -2107,6 +2186,8 @@
       const bearDiv=bearishDivs.length?Math.max(...bearishDivs.map(d=>d.strength)):0;
       const confirmedBull=bullishDivs.some(d=>d.confirmed&&d.strength>=65);
 
+      const empirical=empiricalForResult(r,item.symbol);
+      const priority=entryPriority(r,empirical);
       return {
         item,r,
         pbDist:round1(pbDist),
@@ -2116,7 +2197,8 @@
         bearDiv:round1(bearDiv),
         confirmedBull,
         range52:calc52WeekRange(c.candles),
-        empirical:empiricalForResult(r,item.symbol)
+        empirical,
+        priority
       };
     }catch{
       return null;
@@ -2171,6 +2253,8 @@
         case "escore":
           return ((b.empirical&&!b.empirical.referenceOut&&b.empirical.empiricalScore!=null)?b.empirical.empiricalScore:-1)
                - ((a.empirical&&!a.empirical.referenceOut&&a.empirical.empiricalScore!=null)?a.empirical.empiricalScore:-1);
+        case "priority":
+          return (b.priority?.score??-1)-(a.priority?.score??-1);
         default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
       }
     });
@@ -2252,6 +2336,20 @@
                   : `信頼度 ${x.empirical.quality.label}`}
             </div>
           </div>
+        </div>
+
+        <div class="priority-card">
+          <div class="priority-top">
+            <div>
+              <div class="priority-title">総合エントリー優先度</div>
+              <div class="priority-label">${x.priority.label}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="grade-badge ${x.priority.grade.cls}">${x.priority.grade.grade}</span>
+              <div class="priority-score">${Math.round(x.priority.score)}</div>
+            </div>
+          </div>
+          <div class="priority-reason">${x.priority.reasons.join(" / ")}</div>
         </div>
 
         <div class="mini-grid">
@@ -2461,9 +2559,25 @@
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       ${(()=>{
         const emp=empiricalForResult(r,symbol);
-        if(!emp) return `<div class="empirical"><div class="title">Similarity Calibration 2.1</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        const pr=entryPriority(r,emp);
+        const prBlock=`<div class="priority-card">
+          <div class="priority-top">
+            <div>
+              <div class="priority-title">総合エントリー優先度</div>
+              <div class="priority-label">${pr.label}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="grade-badge ${pr.grade.cls}">${pr.grade.grade}</span>
+              <div class="priority-score">${Math.round(pr.score)}</div>
+            </div>
+          </div>
+          <div class="priority-reason">${pr.reasons.join(" / ")}</div>
+        </div>`;
+
+        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Calibration 2.2</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+
         if(emp.referenceOut){
-          return `<div class="empirical">
+          return prBlock+`<div class="empirical">
             <div class="title">
               Timing ${Math.round(r.timingScore)} × 類似実績 参考外 ・ ${emp.modeLabel}
               <span class="cal-badge cal-low">参考外</span>
@@ -2471,17 +2585,19 @@
             <div class="oos-note">
               ${esc(emp.reason)}。自己銘柄の過去データは類似候補から除外しています。<br>
               類似 ${emp.selectedCount}/${emp.candidateCount} /
-              平均類似度 ${emp.avgSimilarity.toFixed(0)}% /
+              平均類似度 ${emp.avgSimilarity.toFixed(1)}% /
               ${emp.symbols}銘柄。
               数値Scoreは信頼条件を満たすまで表示しません。
             </div>
           </div>`;
         }
+
         const b=emp.baseline;
-        return `<div class="empirical">
+        const g=empiricalTrustGrade(emp);
+        return prBlock+`<div class="empirical">
           <div class="title">
             Timing ${Math.round(r.timingScore)} × 類似実績 ${emp.empiricalScore.toFixed(0)} ・ ${emp.modeLabel}
-            <span class="cal-badge ${emp.quality.cls}">信頼度 ${emp.quality.label}</span>
+            <span class="grade-badge ${g.cls}">${g.grade}</span>
           </div>
           <div class="numbers">
             <div class="nbox"><div class="k">実績スコア</div><div class="v">${emp.empiricalScore.toFixed(0)}</div></div>
@@ -2492,8 +2608,9 @@
             <div class="nbox"><div class="k">類似サンプル</div><div class="v">${emp.stats.n}</div></div>
           </div>
           <div class="foot">
+            信頼度 ${g.grade}（${g.label}） /
             類似 ${emp.selectedCount}/${emp.candidateCount}候補 /
-            平均類似度 ${emp.avgSimilarity.toFixed(0)}% /
+            平均類似度 ${emp.avgSimilarity.toFixed(1)}% /
             ${emp.symbols}銘柄 /
             Entry ${emp.entryLabel}<br>
             ${emp.entryFiltered
