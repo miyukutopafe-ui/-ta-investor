@@ -437,6 +437,25 @@
     .strategy-card .label{font-size:10px;font-weight:900;margin-top:5px}
     .strategy-card .reason{font-size:8px;color:var(--muted);line-height:1.4;margin-top:6px}
     .strategy-summary{margin-top:8px;padding:9px 11px;border-radius:11px;background:rgba(104,227,193,.05);border:1px solid rgba(104,227,193,.13);font-size:9px;color:var(--muted);line-height:1.45}
+    .strategy-emp{
+      margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
+      font-size:8px;color:var(--muted);line-height:1.45;
+    }
+    .strategy-emp strong{color:var(--text)}
+    .strategy-emp.good strong{color:var(--green)}
+    .strategy-emp.out{opacity:.82}
+    .strategy-cal-table{
+      display:grid;grid-template-columns:1fr 58px 70px 44px;gap:6px;
+      align-items:center;margin-top:8px;font-size:9px;
+    }
+    .strategy-cal-row{display:contents}
+    .strategy-cal-head{color:var(--muted);font-size:8px}
+    .strategy-tag{
+      display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+      border:1px solid var(--line);font-size:8px;font-weight:900;
+    }
+    .strategy-tag.trend{color:#8ee8ff;border-color:rgba(74,216,255,.28)}
+    .strategy-tag.reversal{color:#a7f1d4;border-color:rgba(104,227,193,.28)}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -512,6 +531,8 @@
             <option value="priority">推奨優先度順</option>
             <option value="trendPriority">順張り優先度順</option>
             <option value="reversalPriority">反転優先度順</option>
+            <option value="trendEmpirical">順張り実績順</option>
+            <option value="reversalEmpirical">反転実績順</option>
           </select>
         </div>
 
@@ -657,11 +678,11 @@
     },
     set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
     get calibration() {
-      try { return JSON.parse(localStorage.getItem("ta_calibration_v019")) || null; } catch { return null; }
+      try { return JSON.parse(localStorage.getItem("ta_calibration_v020")) || null; } catch { return null; }
     },
     set calibration(v) {
-      if(v==null) localStorage.removeItem("ta_calibration_v019");
-      else localStorage.setItem("ta_calibration_v019", JSON.stringify(v));
+      if(v==null) localStorage.removeItem("ta_calibration_v020");
+      else localStorage.setItem("ta_calibration_v020", JSON.stringify(v));
     }
   };
 
@@ -2018,6 +2039,10 @@
   }
 
   function featureFromResult(r){
+    // Raw strategy scores deliberately exclude empirical calibration
+    // so historical samples never learn from their own future outcomes.
+    const rawTrend=trendPriority(r,null).score;
+    const rawReversal=reversalPriority(r,null).score;
     return {
       m:r.historyMode==="short"?"S":"F",
       ta:round1(r.score),
@@ -2027,11 +2052,15 @@
       et:entryCode(r),
       su:round1(r.timingBreakdown?.setup||0),
       tr:round1(r.timingBreakdown?.trigger||0),
+      ex:round1(r.timingBreakdown?.exhaustion||0),
       cx:round1(r.timingBreakdown?.context||0),
       rk:round1(r.timingBreakdown?.risk||0),
+      sl:round1(r.timingBreakdown?.entryRiskPct||r.tradePlan?.stopDistancePct||0),
       vr:round1(r.volumeRatio||0),
       sg:r.stage?.code||0,
       sp:r.stage?.label||"",
+      ts:round1(rawTrend),
+      rs:round1(rawReversal),
       cm:conditionMask(calibrationConditions(r))
     };
   }
@@ -2097,7 +2126,8 @@
         rows.push({
           s:symbol,
           m:f.m, ta:f.ta, t:f.t, r:f.r, db:f.db, et:f.et,
-          su:f.su, tr:f.tr, cx:f.cx, rk:f.rk, vr:f.vr, sg:f.sg, sp:f.sp, cm:f.cm,
+          su:f.su, tr:f.tr, ex:f.ex, cx:f.cx, rk:f.rk, sl:f.sl,
+          vr:f.vr, sg:f.sg, sp:f.sp, ts:f.ts, rs:f.rs, cm:f.cm,
           fr:round1((future-entry)/entry*100),
           mf:round1((maxHigh-entry)/entry*100),
           ma:round1((minLow-entry)/entry*100),
@@ -2147,9 +2177,60 @@
     return round1(clamp(100-similarityDistance(sample,f)*18,0,100));
   }
 
+  function strategySimilarityDistance(sample,f,strategy){
+    let d=0;
+
+    if(strategy==="trend"){
+      d+=Math.min(Math.abs(sample.t-f.t)/20,2.5)*1.15;
+      d+=Math.min(Math.abs(sample.ta-f.ta)/20,2.5)*0.95;
+      d+=Math.min(Math.abs(sample.tr-f.tr)/18,2.5)*1.10;
+      d+=Math.min(Math.abs((sample.ex||0)-(f.ex||0))/15,2.0)*0.55;
+      d+=Math.min(Math.abs(sample.cx-f.cx)/12,2.0)*0.55;
+      d+=Math.min(Math.abs(sample.rk-f.rk)/8,2.0)*0.50;
+      d+=Math.min(Math.abs((sample.sl||0)-(f.sl||0))/8,2.0)*0.65;
+
+      const sv=Math.log(Math.max(sample.vr,.1));
+      const fv=Math.log(Math.max(f.vr,.1));
+      d+=Math.min(Math.abs(sv-fv),1.5)*0.25;
+
+      if(sample.et!==f.et) d+=0.70;
+      if((sample.sg||0)!==(f.sg||0)) d+=1.00;
+      else if((sample.sp||"")!==(f.sp||"")) d+=0.38;
+
+      d+=Math.min(Math.abs((sample.ts||0)-(f.ts||0))/20,2.0)*0.70;
+      d+=(1-conditionSimilarity(sample.cm,f.cm))*0.45;
+    }else{
+      // Reversal calibration intentionally emphasizes divergence,
+      // oversold state, volume, stage and tactical invalidation.
+      d+=Math.min(Math.abs(sample.db-f.db)/35,2.5)*1.55;
+      d+=Math.min(Math.abs(sample.r-f.r)/35,2.5)*1.25;
+      d+=Math.min(Math.abs(sample.tr-f.tr)/20,2.0)*0.55;
+      d+=Math.min(Math.abs((sample.ex||0)-(f.ex||0))/15,2.0)*0.35;
+      d+=Math.min(Math.abs((sample.sl||0)-(f.sl||0))/8,2.0)*0.75;
+
+      const sv=Math.log(Math.max(sample.vr,.1));
+      const fv=Math.log(Math.max(f.vr,.1));
+      d+=Math.min(Math.abs(sv-fv),1.5)*0.65;
+
+      if((sample.sg||0)!==(f.sg||0)){
+        // Stage 3 and 4 are both reversal-friendly; treat them as neighbors.
+        const bothLate=[3,4].includes(sample.sg||0)&&[3,4].includes(f.sg||0);
+        d+=bothLate?0.25:0.90;
+      }
+      d+=Math.min(Math.abs((sample.rs||0)-(f.rs||0))/18,2.0)*0.80;
+      d+=(1-conditionSimilarity(sample.cm,f.cm))*0.35;
+    }
+
+    return d;
+  }
+
+  function strategySampleSimilarity(sample,f,strategy){
+    return round1(clamp(100-strategySimilarityDistance(sample,f,strategy)*18,0,100));
+  }
+
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.19"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.20"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2279,12 +2360,134 @@
     };
   }
 
+
+  function strategyHistoricalSet(r,symbol,strategy){
+    const cal=store.calibration;
+    if(!cal||cal.version!=="v0.20"||!Array.isArray(cal.samplesCompact)) return null;
+
+    const f=featureFromResult(r);
+    let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
+    const totalModeCandidates=candidates.length;
+
+    if(symbol) candidates=candidates.filter(x=>x.s!==symbol);
+
+    // Strategy pool first. If the strategy pool is too small, fall back to
+    // the whole mode but keep the stricter similarity gate.
+    const strategyPool=candidates.filter(x=>
+      strategy==="trend"
+        ? (x.ts||0)>=45
+        : (x.rs||0)>=50
+    );
+    const strategyPoolCount=strategyPool.length;
+    const usedStrategyPool=strategyPool.length>=20;
+    if(usedStrategyPool) candidates=strategyPool;
+
+    if(!candidates.length){
+      return {
+        strategy,referenceOut:true,
+        reason:f.m==="S"?"他銘柄の短期モード比較データがありません":"戦略別比較候補がありません",
+        stats:null,empiricalScore:null,selectedCount:0,candidateCount:0,
+        totalModeCandidates,strategyPoolCount,symbols:0,avgSimilarity:0,
+        quality:{label:"参考外",cls:"cal-low",weight:0}
+      };
+    }
+
+    const candidateCount=candidates.length;
+    const scored=candidates
+      .map(x=>({x,sim:strategySampleSimilarity(x,f,strategy)}))
+      .sort((a,b)=>b.sim-a.sim);
+
+    const selected=[];
+    const bySymbol={};
+    const strictGate=strategy==="reversal"?48:50;
+
+    for(const item of scored){
+      if(item.sim<strictGate) continue;
+      const sym=item.x.s||"?";
+      if((bySymbol[sym]||0)>=8) continue;
+      selected.push(item);
+      bySymbol[sym]=(bySymbol[sym]||0)+1;
+      if(selected.length>=40) break;
+    }
+
+    // Reversal patterns are rarer. We may relax the candidate gate to build
+    // a diagnostic set, but publication still requires avg similarity >=55%.
+    if(selected.length<15){
+      for(const item of scored){
+        if(selected.includes(item)) continue;
+        const sym=item.x.s||"?";
+        if((bySymbol[sym]||0)>=8) continue;
+        selected.push(item);
+        bySymbol[sym]=(bySymbol[sym]||0)+1;
+        if(selected.length>=20) break;
+      }
+    }
+
+    if(!selected.length) return null;
+
+    const rows=selected.map(z=>z.x);
+    const stats=summarizeCompact(rows);
+    const avgSimilarity=round1(selected.reduce((a,z)=>a+z.sim,0)/selected.length);
+    const symbols=[...new Set(rows.map(x=>x.s))];
+    const quality=calibrationQuality(rows.length,symbols.length,avgSimilarity);
+
+    const publishable=
+      rows.length>=15 &&
+      symbols.length>=3 &&
+      avgSimilarity>=55;
+
+    const rawScore=clamp(
+      50+
+      (stats.winRate-50)*0.70+
+      clamp(stats.avgReturn,-15,15)*0.80+
+      (stats.tpRate-stats.slRate)*0.12,
+      0,100
+    );
+
+    const empiricalScore=publishable
+      ? round1(50+(rawScore-50)*quality.weight)
+      : null;
+
+    return {
+      strategy,
+      strategyLabel:strategy==="trend"?"順張り":"反転",
+      feature:f,
+      stats,
+      empiricalScore,
+      avgSimilarity,
+      symbols:symbols.length,
+      quality,
+      selectedCount:rows.length,
+      candidateCount,
+      totalModeCandidates,
+      strategyPoolCount,
+      usedStrategyPool,
+      publishable,
+      referenceOut:!publishable,
+      reason:publishable
+        ? ""
+        : rows.length<15
+          ? `類似サンプル不足（${rows.length}/15）`
+          : symbols.length<3
+            ? `比較銘柄不足（${symbols.length}/3）`
+            : `平均類似度不足（${avgSimilarity.toFixed(1)}% / 55.0%）`
+    };
+  }
+
+  function strategyEmpiricals(r,symbol=null){
+    return {
+      generic:similarHistoricalSet(r,symbol),
+      trend:strategyHistoricalSet(r,symbol,"trend"),
+      reversal:strategyHistoricalSet(r,symbol,"reversal")
+    };
+  }
+
   async function runCalibration(){
     const btn=$("runCalibrationBtn");
     btn.disabled=true;
     btn.textContent="計算中";
     $("calibrationResults").innerHTML="";
-    $("calProgress").textContent="Calibration 2.1 を開始します…";
+    $("calProgress").textContent="Strategy Calibration 3.0 を開始します…";
 
     const allRows=[];
     const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=55);
@@ -2320,8 +2523,19 @@
       });
     });
 
+    const strategyModes={F:{},S:{}};
+    ["F","S"].forEach(mode=>{
+      const modeRows=allRows.filter(x=>x.m===mode);
+      const trendRows=modeRows.filter(x=>(x.ts||0)>=45);
+      const reversalRows=modeRows.filter(x=>(x.rs||0)>=50);
+      strategyModes[mode]={
+        trend:{samples:trendRows.length,stats:summarizeCompact(trendRows)},
+        reversal:{samples:reversalRows.length,stats:summarizeCompact(reversalRows)}
+      };
+    });
+
     const calibration={
-      version:"v0.19",
+      version:"v0.20",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
@@ -2333,7 +2547,8 @@
         S:allRows.filter(x=>x.m==="S").length
       },
       modeBuckets,
-      conditionModes
+      conditionModes,
+      strategyModes
     };
 
     store.calibration=calibration;
@@ -2385,23 +2600,54 @@
     </div>`;
   }
 
+
+  function renderStrategyCalibration(mode,calibration){
+    const x=calibration.strategyModes?.[mode];
+    if(!x) return "";
+    const label=mode==="F"?"フル履歴":"短期";
+    const rows=[
+      ["trend","順張り",x.trend],
+      ["reversal","反転",x.reversal]
+    ];
+    return `<div class="mode-section">
+      <div class="mode-title">戦略別母集団 ・ ${label}</div>
+      <div class="strategy-cal-table">
+        <div class="strategy-cal-row strategy-cal-head">
+          <div>戦略</div><div class="right">勝率</div><div class="right">平均20D</div><div class="right">n</div>
+        </div>
+        ${rows.map(([key,name,v])=>{
+          const st=v?.stats||{winRate:0,avgReturn:0,n:0};
+          return `<div class="strategy-cal-row">
+            <div><span class="strategy-tag ${key}">${name}</span></div>
+            <div class="right ${st.winRate>=60?"bt-good":st.winRate<45?"bt-bad":"bt-mid"}">${v?.samples?st.winRate.toFixed(0)+"%":"—"}</div>
+            <div class="right ${st.avgReturn>=0?"bt-good":"bt-bad"}">${v?.samples?(st.avgReturn>=0?"+":"")+st.avgReturn.toFixed(1)+"%":"—"}</div>
+            <div class="right">${v?.samples||0}</div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>`;
+  }
+
   function renderCalibrationResults(calibration=store.calibration){
     const box=$("calibrationResults");
     if(!box) return;
 
-    if(!calibration||calibration.version!=="v0.19"){
-      box.innerHTML=`<div class="bt-note">Calibration 2.4は未実行です。「類似校正」を押してください。</div>`;
+    if(!calibration||calibration.version!=="v0.20"){
+      box.innerHTML=`<div class="bt-note">Strategy Calibration 3.0は未実行です。「類似校正」を押してください。</div>`;
       return;
     }
 
     box.innerHTML=`
       <div class="sim-note">
-        類似局面検索では、短期/フル履歴を分離したうえで、
-        TA・Timing・RCI9・強気DIV・Stage・Trigger・Context・Tactical Risk・出来高・エントリー型・点灯条件を比較します。
+        Strategy Calibration 3.0では、短期/フル履歴に加えて順張り/反転を分離します。
+        順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
+        反転は強気DIV・RCI売られ過ぎ・出来高・Stage 3/4・Tactical Riskを重視して類似局面を検索します。
         評価対象銘柄自身の過去データは検索から除外します。
         さらに1銘柄が母集団を占有しないよう、類似候補は1銘柄あたり最大8件、採用は最大40件に制限します。
         一覧では「類似40/候補312」のように、採用数と候補数を分けて表示します。
       </div>
+      ${renderStrategyCalibration("F",calibration)}
+      ${renderStrategyCalibration("S",calibration)}
       ${renderModeCalibration("F",calibration)}
       ${renderModeCalibration("S",calibration)}
       <div class="cal-progress">
@@ -2511,16 +2757,16 @@
     if(exhaustion>=12) reasons.push("Exhaustion強");
     else if(exhaustion>=6) reasons.push("Exhaustion注意");
     if(emp&&!emp.referenceOut&&emp.empiricalScore!=null){
-      if(emp.empiricalScore>=70) reasons.push("類似実績強");
-      else if(emp.empiricalScore>=58) reasons.push("類似実績良好");
-      else reasons.push("類似実績弱め");
-    }else reasons.push("類似実績参考外");
+      if(emp.empiricalScore>=70) reasons.push("順張り実績強");
+      else if(emp.empiricalScore>=58) reasons.push("順張り実績良好");
+      else reasons.push("順張り実績弱め");
+    }else reasons.push("順張り実績未検証");
     if(stage.label) reasons.push(stage.label);
     if(ta>=75) reasons.push("TA強");
     if(tacticalSL>15) reasons.push("T-SL広め");
     caps.forEach(c=>reasons.push(`上限:${c.reason}`));
 
-    return {score,label:scoreLabel(score),grade,reasons,caps,type:"trend"};
+    return {score,label:scoreLabel(score),grade,reasons,caps,type:"trend",empirical:emp};
   }
 
   function reversalPriority(r,emp){
@@ -2585,16 +2831,24 @@
     if(r.r9<=-80) reasons.push("RCI売られ過ぎ");
     else if(r.r9<=-60) reasons.push("RCI低位");
     if(r.volumeRatio>=1.3) reasons.push("出来高増");
+    if(emp&&!emp.referenceOut&&emp.empiricalScore!=null){
+      if(emp.empiricalScore>=70) reasons.push("反転実績強");
+      else if(emp.empiricalScore>=58) reasons.push("反転実績良好");
+      else reasons.push("反転実績弱め");
+    }else reasons.push("反転実績未検証");
     if(stage.code===3||stage.code===4) reasons.push(stage.label);
     if(tacticalSL<=10) reasons.push("T-SL良好");
     caps.forEach(c=>reasons.push(`上限:${c.reason}`));
 
-    return {score,label,grade,reasons,caps,type:"reversal",bullDiv};
+    return {score,label,grade,reasons,caps,type:"reversal",bullDiv,empirical:emp};
   }
 
-  function entryPriority(r,emp){
-    const trend=trendPriority(r,emp);
-    const reversal=reversalPriority(r,emp);
+  function entryPriority(r,empBundle){
+    const generic=empBundle?.generic ?? empBundle ?? null;
+    const trendEmp=empBundle?.trend ?? generic;
+    const reversalEmp=empBundle?.reversal ?? generic;
+    const trend=trendPriority(r,trendEmp);
+    const reversal=reversalPriority(r,reversalEmp);
     const best=reversal.score>trend.score?reversal:trend;
     const bestName=best.type==="reversal"?"反転":"順張り";
     return {
@@ -2608,6 +2862,21 @@
       trend,
       reversal
     };
+  }
+
+
+  function strategyEmpiricalText(emp){
+    if(!emp) return `<div class="strategy-emp out">戦略実績：未校正</div>`;
+    if(emp.referenceOut||emp.empiricalScore==null){
+      return `<div class="strategy-emp out">戦略実績：参考外 / ${esc(emp.reason||"比較データ不足")} / 類似 ${emp.selectedCount||0}/${emp.candidateCount||0}</div>`;
+    }
+    const g=empiricalTrustGrade(emp);
+    return `<div class="strategy-emp good">
+      戦略実績 <strong>${emp.empiricalScore.toFixed(0)}</strong> ${g.grade} /
+      20D勝率 <strong>${emp.stats.winRate.toFixed(0)}%</strong> /
+      平均 <strong>${emp.stats.avgReturn>=0?"+":""}${emp.stats.avgReturn.toFixed(1)}%</strong> /
+      n=${emp.stats.n}
+    </div>`;
   }
 
   // ---------- Rendering ----------
@@ -2632,8 +2901,9 @@
       const bearDiv=bearishDivs.length?Math.max(...bearishDivs.map(d=>d.strength)):0;
       const confirmedBull=bullishDivs.some(d=>d.confirmed&&d.strength>=65);
 
-      const empirical=empiricalForResult(r,item.symbol);
-      const priority=entryPriority(r,empirical);
+      const empiricalBundle=strategyEmpiricals(r,item.symbol);
+      const empirical=empiricalBundle.generic;
+      const priority=entryPriority(r,empiricalBundle);
       return {
         item,r,
         pbDist:round1(pbDist),
@@ -2644,6 +2914,7 @@
         confirmedBull,
         range52:calc52WeekRange(c.candles),
         empirical,
+        empiricalBundle,
         priority
       };
     }catch{
@@ -2705,6 +2976,12 @@
           return (b.priority?.trend?.score??-1)-(a.priority?.trend?.score??-1);
         case "reversalPriority":
           return (b.priority?.reversal?.score??-1)-(a.priority?.reversal?.score??-1);
+        case "trendEmpirical":
+          return ((b.priority?.trend?.empirical&&!b.priority.trend.empirical.referenceOut)?b.priority.trend.empirical.empiricalScore:-1)
+               - ((a.priority?.trend?.empirical&&!a.priority.trend.empirical.referenceOut)?a.priority.trend.empirical.empiricalScore:-1);
+        case "reversalEmpirical":
+          return ((b.priority?.reversal?.empirical&&!b.priority.reversal.empirical.referenceOut)?b.priority.reversal.empirical.empiricalScore:-1)
+               - ((a.priority?.reversal?.empirical&&!a.priority.reversal.empirical.referenceOut)?a.priority.reversal.empirical.empiricalScore:-1);
         default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
       }
     });
@@ -2770,7 +3047,7 @@
             <div class="sub">${esc(r.action)}</div>
           </div>
           <div class="dual-box ${x.empirical?.referenceOut?"reference-out":""}">
-            <div class="k">類似実績</div>
+            <div class="k">共通類似実績</div>
             <div class="v">${
               !x.empirical
                 ? "—"
@@ -2794,12 +3071,14 @@
             <div class="v">${Math.round(x.priority.trend.score)}</div>
             <div class="label">${x.priority.trend.label}</div>
             <div class="reason">${x.priority.trend.reasons.slice(0,4).join(" / ")}</div>
+            ${strategyEmpiricalText(x.priority.trend.empirical)}
           </div>
           <div class="strategy-card ${x.priority.type==="reversal"?"best":""}">
             <div class="k">反転優先度</div>
             <div class="v">${Math.round(x.priority.reversal.score)}</div>
             <div class="label">${x.priority.reversal.label}</div>
             <div class="reason">${x.priority.reversal.reasons.slice(0,4).join(" / ")}</div>
+            ${strategyEmpiricalText(x.priority.reversal.empirical)}
           </div>
         </div>
         <div class="strategy-summary">
@@ -3039,20 +3318,23 @@
 
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       ${(()=>{
-        const emp=empiricalForResult(r,symbol);
-        const pr=entryPriority(r,emp);
+        const empBundle=strategyEmpiricals(r,symbol);
+        const emp=empBundle.generic;
+        const pr=entryPriority(r,empBundle);
         const prBlock=`<div class="strategy-grid">
           <div class="strategy-card ${pr.type==="trend"?"best":""}">
             <div class="k">順張り優先度</div>
             <div class="v">${Math.round(pr.trend.score)}</div>
             <div class="label">${pr.trend.label}</div>
             <div class="reason">${pr.trend.reasons.slice(0,5).join(" / ")}</div>
+            ${strategyEmpiricalText(pr.trend.empirical)}
           </div>
           <div class="strategy-card ${pr.type==="reversal"?"best":""}">
             <div class="k">反転優先度</div>
             <div class="v">${Math.round(pr.reversal.score)}</div>
             <div class="label">${pr.reversal.label}</div>
             <div class="reason">${pr.reversal.reasons.slice(0,5).join(" / ")}</div>
+            ${strategyEmpiricalText(pr.reversal.empirical)}
           </div>
         </div>
         <div class="strategy-summary">
@@ -3061,7 +3343,7 @@
           ${pr.label}
         </div>`;
 
-        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Calibration 2.4</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Strategy Calibration 3.0</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
 
         if(emp.referenceOut){
           return prBlock+`<div class="empirical">
