@@ -348,6 +348,21 @@
     .empirical .nbox .k { font-size:8px; color:var(--muted); }
     .empirical .nbox .v { font-size:15px; font-weight:900; margin-top:2px; }
     .empirical .foot { color:var(--muted); font-size:9px; line-height:1.4; margin-top:7px; }
+    .sim-note {
+      margin-top:8px; padding:9px 10px; border-radius:11px;
+      background:rgba(104,227,193,.06); border:1px solid rgba(104,227,193,.15);
+      color:var(--muted); font-size:9px; line-height:1.5;
+    }
+    .sim-score {
+      display:inline-flex; align-items:baseline; gap:4px;
+      font-size:10px; color:var(--muted);
+    }
+    .sim-score strong { font-size:20px; color:var(--text); }
+    .mode-section {
+      margin-top:13px; padding-top:10px; border-top:1px solid var(--line);
+    }
+    .mode-section:first-child { border-top:0; padding-top:0; }
+    .mode-title { font-size:11px; font-weight:900; margin-bottom:6px; }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -418,6 +433,8 @@
             <option value="risk">損切り幅が狭い順</option>
             <option value="52high">52週高値に近い順</option>
             <option value="52low">52週安値に近い順</option>
+            <option value="empirical">類似局面20D勝率順</option>
+            <option value="escore">実績スコア順</option>
           </select>
         </div>
 
@@ -434,11 +451,11 @@
             <div class="grow">
               <h3>スコア校正</h3>
               <div class="cal-sub">
-                ウォッチリスト全銘柄の過去データを使い、Timing 3.0と各シグナルの「実際のその後」を集計します。
-                20営業日後を基準に、5営業日おきのサンプルを使って重複を減らします。
+                ウォッチリスト全銘柄の過去データを使い、Timing 3.0の点数帯に加えて、TA・Timing・RCI・DIV・エントリー型などが似た過去局面を検索します。
+                短期モードとフル履歴モードは混ぜず、20営業日後の実績を比較します。
               </div>
             </div>
-            <button class="secondary" id="runCalibrationBtn">校正</button>
+            <button class="secondary" id="runCalibrationBtn">類似校正</button>
           </div>
           <div id="calProgress" class="cal-progress">まだ校正していません。</div>
           <div id="calibrationResults"></div>
@@ -563,11 +580,11 @@
     },
     set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
     get calibration() {
-      try { return JSON.parse(localStorage.getItem("ta_calibration_v013")) || null; } catch { return null; }
+      try { return JSON.parse(localStorage.getItem("ta_calibration_v014")) || null; } catch { return null; }
     },
     set calibration(v) {
-      if(v==null) localStorage.removeItem("ta_calibration_v013");
-      else localStorage.setItem("ta_calibration_v013", JSON.stringify(v));
+      if(v==null) localStorage.removeItem("ta_calibration_v014");
+      else localStorage.setItem("ta_calibration_v014", JSON.stringify(v));
     }
   };
 
@@ -1573,33 +1590,15 @@
     return "80-100";
   }
 
-  function calibrationQuality(n){
-    if(n>=50) return {label:"高",cls:"cal-high"};
-    if(n>=20) return {label:"中",cls:"cal-mid"};
-    return {label:"低",cls:"cal-low"};
-  }
+  const CAL_CONDITIONS=[
+    "MA200反発","MA40反発","MA20上抜け","PB反発","ER突破","主要ブレイク",
+    "RCI反転","MACD改善","RCI低位","RCI90+出来高","強気DIV","強TA+押し目","安値切り上げ"
+  ];
 
-  function summarizeCalibrationRows(rows){
-    if(!rows.length) return {n:0,winRate:0,avgReturn:0,medianReturn:0,tpRate:0,slRate:0,avgMfe:0,avgMae:0};
-
-    const rets=rows.map(x=>x.forwardReturn);
-    const sorted=[...rets].sort((a,b)=>a-b);
-    const mid=Math.floor(sorted.length/2);
-    const med=sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2;
-    const resolved=rows.filter(x=>x.firstHit==="tp"||x.firstHit==="sl");
-    const tp=resolved.filter(x=>x.firstHit==="tp").length;
-    const sl=resolved.filter(x=>x.firstHit==="sl").length;
-
-    return {
-      n:rows.length,
-      winRate:round1(rows.filter(x=>x.forwardReturn>0).length/rows.length*100),
-      avgReturn:round1(rets.reduce((a,b)=>a+b,0)/rows.length),
-      medianReturn:round1(med),
-      tpRate:round1(resolved.length?tp/resolved.length*100:0),
-      slRate:round1(resolved.length?sl/resolved.length*100:0),
-      avgMfe:round1(rows.reduce((a,x)=>a+x.mfe,0)/rows.length),
-      avgMae:round1(rows.reduce((a,x)=>a+x.mae,0)/rows.length)
-    };
+  function calibrationQuality(n,symbols=0,avgSimilarity=0){
+    if(n>=30&&symbols>=5&&avgSimilarity>=65) return {label:"高",cls:"cal-high",weight:1};
+    if(n>=15&&symbols>=3&&avgSimilarity>=55) return {label:"中",cls:"cal-mid",weight:.75};
+    return {label:"低",cls:"cal-low",weight:.5};
   }
 
   function calibrationConditions(r){
@@ -1626,9 +1625,83 @@
     return [...new Set(out)];
   }
 
+  function conditionMask(names){
+    let mask=0;
+    (names||[]).forEach(name=>{
+      const i=CAL_CONDITIONS.indexOf(name);
+      if(i>=0) mask|=(1<<i);
+    });
+    return mask;
+  }
+
+  function maskNames(mask){
+    return CAL_CONDITIONS.filter((_,i)=>(mask&(1<<i))!==0);
+  }
+
+  function entryCode(r){
+    const x=r.timingBreakdown?.entryType||"";
+    if(x==="PB反発") return "P";
+    if(x==="MA20 Reclaim") return "M";
+    if(x==="ER Breakout") return "E";
+    if(x==="Major Breakout") return "B";
+    return "N";
+  }
+
+  function entryLabel(code){
+    return {P:"PB反発",M:"MA20 Reclaim",E:"ER Breakout",B:"Major Breakout",N:"現在値"}[code]||"現在値";
+  }
+
+  function bullDivStrength(r){
+    const xs=r.divergences.filter(d=>d.direction==="bullish"&&d.confirmed);
+    return xs.length?Math.max(...xs.map(d=>d.strength)):0;
+  }
+
+  function featureFromResult(r){
+    return {
+      m:r.historyMode==="short"?"S":"F",
+      ta:round1(r.score),
+      t:round1(r.timingScore),
+      r:round1(r.r9),
+      db:round1(bullDivStrength(r)),
+      et:entryCode(r),
+      su:round1(r.timingBreakdown?.setup||0),
+      tr:round1(r.timingBreakdown?.trigger||0),
+      cx:round1(r.timingBreakdown?.context||0),
+      rk:round1(r.timingBreakdown?.risk||0),
+      vr:round1(r.volumeRatio||0),
+      cm:conditionMask(calibrationConditions(r))
+    };
+  }
+
+  function summarizeCompact(rows){
+    if(!rows.length) return {n:0,winRate:0,avgReturn:0,medianReturn:0,tpRate:0,slRate:0,avgMfe:0,avgMae:0};
+
+    const rets=rows.map(x=>x.fr);
+    const sorted=[...rets].sort((a,b)=>a-b);
+    const mid=Math.floor(sorted.length/2);
+    const med=sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2;
+    const resolved=rows.filter(x=>x.fh==="T"||x.fh==="L");
+    const tp=resolved.filter(x=>x.fh==="T").length;
+    const sl=resolved.filter(x=>x.fh==="L").length;
+
+    return {
+      n:rows.length,
+      winRate:round1(rows.filter(x=>x.fr>0).length/rows.length*100),
+      avgReturn:round1(rets.reduce((a,b)=>a+b,0)/rows.length),
+      medianReturn:round1(med),
+      tpRate:round1(resolved.length?tp/resolved.length*100:0),
+      slRate:round1(resolved.length?sl/resolved.length*100:0),
+      avgMfe:round1(rows.reduce((a,x)=>a+x.mf,0)/rows.length),
+      avgMae:round1(rows.reduce((a,x)=>a+x.ma,0)/rows.length)
+    };
+  }
+
   function calibrationSnapshotsForSymbol(symbol,candles,horizon=20,step=5){
     const rows=[];
-    const minBars=60;
+    // Important: a long-listed stock must NOT be treated as "short mode"
+    // just because we truncated its historical slice.
+    const genuineMode=candles.length<220?"S":"F";
+    const minBars=genuineMode==="S"?35:220;
     const end=candles.length-1-horizon;
     if(end<minBars-1) return rows;
 
@@ -1636,10 +1709,11 @@
       try{
         const hist=candles.slice(0,i+1);
         const r=evaluateTA(symbol,hist);
+        if((r.historyMode==="short"?"S":"F")!==genuineMode) continue;
+
         const entry=candles[i].close;
         const futureSlice=candles.slice(i+1,i+horizon+1);
         if(futureSlice.length<horizon) continue;
-
         const future=futureSlice[futureSlice.length-1].close;
         const maxHigh=Math.max(...futureSlice.map(c=>c.high));
         const minLow=Math.min(...futureSlice.map(c=>c.low));
@@ -1647,31 +1721,141 @@
         const stop=r.timingBreakdown?.entryStop ?? r.tradePlan.stopLoss;
         const unitRisk=Math.max(entry-stop,0.01);
         const target2R=entry+2*unitRisk;
-        let firstHit="none";
-
+        let firstHit="N";
         for(const c of futureSlice){
           const hitSL=c.low<=stop;
           const hitTP=c.high>=target2R;
-          if(hitSL&&hitTP){ firstHit="both"; break; }
-          if(hitTP){ firstHit="tp"; break; }
-          if(hitSL){ firstHit="sl"; break; }
+          if(hitSL&&hitTP){ firstHit="B"; break; }
+          if(hitTP){ firstHit="T"; break; }
+          if(hitSL){ firstHit="L"; break; }
         }
 
+        const f=featureFromResult(r);
         rows.push({
-          symbol,
-          date:candles[i].date,
-          timing:r.timingScore,
-          score:r.score,
-          bucket:timingBucket(r.timingScore),
-          conditions:calibrationConditions(r),
-          forwardReturn:round1((future-entry)/entry*100),
-          mfe:round1((maxHigh-entry)/entry*100),
-          mae:round1((minLow-entry)/entry*100),
-          firstHit
+          s:symbol,
+          m:f.m, ta:f.ta, t:f.t, r:f.r, db:f.db, et:f.et,
+          su:f.su, tr:f.tr, cx:f.cx, rk:f.rk, vr:f.vr, cm:f.cm,
+          fr:round1((future-entry)/entry*100),
+          mf:round1((maxHigh-entry)/entry*100),
+          ma:round1((minLow-entry)/entry*100),
+          fh:firstHit
         });
       }catch{}
     }
     return rows;
+  }
+
+  function bitCount(n){
+    let c=0;
+    n=n>>>0;
+    while(n){ n&=n-1; c++; }
+    return c;
+  }
+
+  function conditionSimilarity(a,b){
+    const union=(a|b)>>>0;
+    if(!union) return 1;
+    const inter=(a&b)>>>0;
+    return bitCount(inter)/bitCount(union);
+  }
+
+  function similarityDistance(sample,f){
+    let d=0;
+    d+=Math.min(Math.abs(sample.t-f.t)/20,2.5)*1.40;
+    d+=Math.min(Math.abs(sample.ta-f.ta)/20,2.5)*1.10;
+    d+=Math.min(Math.abs(sample.r-f.r)/50,2.5)*0.80;
+    d+=Math.min(Math.abs(sample.db-f.db)/50,2)*0.65;
+    d+=Math.min(Math.abs(sample.tr-f.tr)/20,2)*0.55;
+    d+=Math.min(Math.abs(sample.cx-f.cx)/12,2)*0.45;
+    d+=Math.min(Math.abs(sample.rk-f.rk)/8,2)*0.35;
+
+    const sv=Math.log(Math.max(sample.vr,.1));
+    const fv=Math.log(Math.max(f.vr,.1));
+    d+=Math.min(Math.abs(sv-fv),1.5)*0.30;
+
+    if(sample.et!==f.et) d+=0.90;
+    d+=(1-conditionSimilarity(sample.cm,f.cm))*0.70;
+    return d;
+  }
+
+  function sampleSimilarity(sample,f){
+    return round1(clamp(100-similarityDistance(sample,f)*18,0,100));
+  }
+
+  function similarHistoricalSet(r,symbol=null){
+    const cal=store.calibration;
+    if(!cal||cal.version!=="v0.14"||!Array.isArray(cal.samplesCompact)) return null;
+
+    const f=featureFromResult(r);
+    let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
+    if(!candidates.length) return null;
+
+    const exactEntry=candidates.filter(x=>x.et===f.et);
+    if(exactEntry.length>=15) candidates=exactEntry;
+
+    const scored=candidates.map(x=>({x,sim:sampleSimilarity(x,f)}))
+      .sort((a,b)=>b.sim-a.sim);
+
+    const selected=[];
+    const bySymbol={};
+
+    // First pass: reasonably similar, max 8 observations per symbol.
+    for(const item of scored){
+      if(item.sim<45) continue;
+      const sym=item.x.s||"?";
+      if((bySymbol[sym]||0)>=8) continue;
+      selected.push(item);
+      bySymbol[sym]=(bySymbol[sym]||0)+1;
+      if(selected.length>=40) break;
+    }
+
+    // If the strict set is too small, relax similarity but keep diversity.
+    if(selected.length<15){
+      for(const item of scored){
+        if(selected.includes(item)) continue;
+        const sym=item.x.s||"?";
+        if((bySymbol[sym]||0)>=8) continue;
+        selected.push(item);
+        bySymbol[sym]=(bySymbol[sym]||0)+1;
+        if(selected.length>=20) break;
+      }
+    }
+
+    if(!selected.length) return null;
+
+    const rows=selected.map(z=>z.x);
+    const stats=summarizeCompact(rows);
+    const avgSimilarity=round1(selected.reduce((a,z)=>a+z.sim,0)/selected.length);
+    const symbols=[...new Set(rows.map(x=>x.s))];
+    const quality=calibrationQuality(rows.length,symbols.length,avgSimilarity);
+
+    const rawScore=clamp(
+      50+
+      (stats.winRate-50)*0.70+
+      clamp(stats.avgReturn,-15,15)*0.80+
+      (stats.tpRate-stats.slRate)*0.12,
+      0,100
+    );
+    const empiricalScore=round1(50+(rawScore-50)*quality.weight);
+
+    const bucket=timingBucket(r.timingScore);
+    const modeBuckets=cal.modeBuckets?.[f.m]||{};
+    const baseline=modeBuckets[bucket]||null;
+
+    return {
+      feature:f,
+      mode:f.m,
+      modeLabel:f.m==="S"?"短期モード":"フル履歴",
+      entryLabel:entryLabel(f.et),
+      stats,
+      empiricalScore,
+      avgSimilarity,
+      symbols:symbols.length,
+      quality,
+      bucket,
+      baseline,
+      currentConditions:maskNames(f.cm)
+    };
   }
 
   async function runCalibration(){
@@ -1679,15 +1863,15 @@
     btn.disabled=true;
     btn.textContent="計算中";
     $("calibrationResults").innerHTML="";
-    $("calProgress").textContent="校正を開始します…";
+    $("calProgress").textContent="Calibration 2.0 を開始します…";
 
     const allRows=[];
-    const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=80);
+    const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=55);
 
     if(!usable.length){
       $("calProgress").textContent="校正できる銘柄データがありません。まず右上↻でデータを取得してください。";
       btn.disabled=false;
-      btn.textContent="校正";
+      btn.textContent="類似校正";
       return;
     }
 
@@ -1699,63 +1883,66 @@
     }
 
     const bucketNames=["0-19","20-39","40-59","60-79","80-100"];
-    const buckets={};
-    bucketNames.forEach(b=>buckets[b]=summarizeCalibrationRows(allRows.filter(x=>x.bucket===b)));
+    const modeBuckets={F:{},S:{}};
+    ["F","S"].forEach(mode=>{
+      bucketNames.forEach(b=>{
+        modeBuckets[mode][b]=summarizeCompact(allRows.filter(x=>x.m===mode&&timingBucket(x.t)===b));
+      });
+    });
 
-    const conditionNames=[
-      "MA200反発","MA40反発","MA20上抜け","PB反発","ER突破","主要ブレイク",
-      "RCI反転","MACD改善","RCI低位","RCI90+出来高","強気DIV","強TA+押し目","安値切り上げ"
-    ];
-    const conditions={};
-    conditionNames.forEach(name=>{
-      const rows=allRows.filter(x=>x.conditions.includes(name));
-      if(rows.length) conditions[name]=summarizeCalibrationRows(rows);
+    const conditionModes={F:{},S:{}};
+    ["F","S"].forEach(mode=>{
+      CAL_CONDITIONS.forEach((name,i)=>{
+        const bit=1<<i;
+        const rows=allRows.filter(x=>x.m===mode&&(x.cm&bit));
+        if(rows.length) conditionModes[mode][name]=summarizeCompact(rows);
+      });
     });
 
     const calibration={
-      version:"v0.13",
+      version:"v0.14",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
       symbols:usable.map(x=>x.symbol),
       samples:allRows.length,
-      buckets,
-      conditions
+      samplesCompact:allRows,
+      modeSamples:{
+        F:allRows.filter(x=>x.m==="F").length,
+        S:allRows.filter(x=>x.m==="S").length
+      },
+      modeBuckets,
+      conditionModes
     };
 
     store.calibration=calibration;
-    $("calProgress").textContent=`完了：${usable.length}銘柄 / ${allRows.length}サンプル。詳細画面にも実績値を反映しました。`;
+    $("calProgress").textContent=
+      `完了：${usable.length}銘柄 / ${allRows.length}サンプル（フル ${calibration.modeSamples.F} / 短期 ${calibration.modeSamples.S}）。`;
     renderCalibrationResults(calibration);
     btn.disabled=false;
     btn.textContent="再校正";
+
+    if(listMode==="screen") renderScreener();
   }
 
-  function renderCalibrationResults(calibration=store.calibration,currentTiming=null){
-    const box=$("calibrationResults");
-    if(!box) return;
-
-    if(!calibration){
-      box.innerHTML=`<div class="bt-note">「校正」を押すと、取得済みのウォッチリスト全銘柄を横断検証します。</div>`;
-      return;
-    }
+  function renderModeCalibration(mode,calibration){
+    const label=mode==="F"?"フル履歴モード":"短期モード";
+    const count=calibration.modeSamples?.[mode]||0;
+    if(!count) return "";
 
     const buckets=["0-19","20-39","40-59","60-79","80-100"];
-    const currentBucket=currentTiming==null?null:timingBucket(currentTiming);
-
-    const condRows=Object.entries(calibration.conditions||{})
+    const condRows=Object.entries(calibration.conditionModes?.[mode]||{})
       .filter(([,v])=>v.n>=5)
-      .sort((a,b)=>{
-        if(b[1].n!==a[1].n) return b[1].n-a[1].n;
-        return b[1].avgReturn-a[1].avgReturn;
-      });
+      .sort((a,b)=>b[1].n-a[1].n)
+      .slice(0,10);
 
-    box.innerHTML=`
+    return `<div class="mode-section">
+      <div class="mode-title">${label} ・ ${count}サンプル</div>
       <div class="cal-table">
         <div class="cal-row head"><div>Timing</div><div class="right">20D勝率</div><div class="right">平均</div><div class="right">n</div></div>
         ${buckets.map(b=>{
-          const x=calibration.buckets?.[b]||{n:0,winRate:0,avgReturn:0};
-          const cur=b===currentBucket?" cal-bucket-current":"";
-          return `<div class="cal-row${cur}">
+          const x=calibration.modeBuckets?.[mode]?.[b]||{n:0,winRate:0,avgReturn:0};
+          return `<div class="cal-row">
             <div>${b}</div>
             <div class="right ${x.winRate>=60?"bt-good":x.winRate<45?"bt-bad":"bt-mid"}">${x.n?x.winRate.toFixed(0)+"%":"—"}</div>
             <div class="right ${x.avgReturn>=0?"bt-good":"bt-bad"}">${x.n?(x.avgReturn>=0?"+":"")+x.avgReturn.toFixed(1)+"%":"—"}</div>
@@ -1763,39 +1950,45 @@
           </div>`;
         }).join("")}
       </div>
+      ${condRows.length?`
+        <div class="small muted" style="margin-top:12px;">条件別（${label}のみ）</div>
+        <div class="cal-table">
+          ${condRows.map(([name,x])=>`
+            <div class="cal-condition">
+              <div class="name">${esc(name)}</div>
+              <div class="right ${x.winRate>=60?"bt-good":x.winRate<45?"bt-bad":"bt-mid"}">${x.winRate.toFixed(0)}%</div>
+              <div class="right ${x.avgReturn>=0?"bt-good":"bt-bad"}">${x.avgReturn>=0?"+":""}${x.avgReturn.toFixed(1)}%</div>
+              <div class="right">${x.n}</div>
+            </div>`).join("")}
+        </div>`:""}
+    </div>`;
+  }
 
-      <div class="small muted" style="margin-top:14px;">条件別の実績</div>
-      <div class="cal-table">
-        ${condRows.length?condRows.map(([name,x])=>`
-          <div class="cal-condition">
-            <div class="name">${esc(name)}</div>
-            <div class="right ${x.winRate>=60?"bt-good":x.winRate<45?"bt-bad":"bt-mid"}">${x.winRate.toFixed(0)}%</div>
-            <div class="right ${x.avgReturn>=0?"bt-good":"bt-bad"}">${x.avgReturn>=0?"+":""}${x.avgReturn.toFixed(1)}%</div>
-            <div class="right">${x.n}</div>
-          </div>`).join(""):`<div class="bt-note">条件別サンプルがまだ不足しています。</div>`}
+  function renderCalibrationResults(calibration=store.calibration){
+    const box=$("calibrationResults");
+    if(!box) return;
+
+    if(!calibration||calibration.version!=="v0.14"){
+      box.innerHTML=`<div class="bt-note">Calibration 2.0は未実行です。「類似校正」を押してください。</div>`;
+      return;
+    }
+
+    box.innerHTML=`
+      <div class="sim-note">
+        類似局面検索では、短期/フル履歴を分離したうえで、
+        TA・Timing・RCI9・強気DIV・Trigger・Context・Risk・出来高・エントリー型・点灯条件を比較します。
+        1銘柄が母集団を占有しないよう、類似候補は1銘柄あたり最大8件に制限します。
       </div>
-
+      ${renderModeCalibration("F",calibration)}
+      ${renderModeCalibration("S",calibration)}
       <div class="cal-progress">
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
-        日次すべてを数えないことで、同じ上昇局面の重複カウントを抑えています。
+        長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。
       </div>`;
   }
 
-  function empiricalForResult(r){
-    const cal=store.calibration;
-    if(!cal) return null;
-
-    const bucket=timingBucket(r.timingScore);
-    const stats=cal.buckets?.[bucket];
-    if(!stats||!stats.n) return null;
-
-    const currentConditions=calibrationConditions(r);
-    const matching=currentConditions
-      .map(name=>({name,stats:cal.conditions?.[name]}))
-      .filter(x=>x.stats&&x.stats.n>=5)
-      .sort((a,b)=>b.stats.n-a.stats.n);
-
-    return {bucket,stats,matching,cal};
+  function empiricalForResult(r,symbol=null){
+    return similarHistoricalSet(r,symbol);
   }
 
   // ---------- Rendering ----------
@@ -1828,7 +2021,8 @@
         bullDiv:round1(bullDiv),
         bearDiv:round1(bearDiv),
         confirmedBull,
-        range52:calc52WeekRange(c.candles)
+        range52:calc52WeekRange(c.candles),
+        empirical:empiricalForResult(r,item.symbol)
       };
     }catch{
       return null;
@@ -1877,6 +2071,8 @@
         case "risk": return a.r.tradePlan.stopDistancePct-b.r.tradePlan.stopDistancePct;
         case "52high": return Math.abs(a.range52?.fromHigh??-999)-Math.abs(b.range52?.fromHigh??-999);
         case "52low": return Math.abs(a.range52?.fromLow??999)-Math.abs(b.range52?.fromLow??999);
+        case "empirical": return (b.empirical?.stats.winRate??-1)-(a.empirical?.stats.winRate??-1);
+        case "escore": return (b.empirical?.empiricalScore??-1)-(a.empirical?.empiricalScore??-1);
         default: return b.r.timingScore-a.r.timingScore || b.r.score-a.r.score;
       }
     });
@@ -1951,10 +2147,11 @@
           ERまで ${x.erDist>=0?"+":""}${x.erDist.toFixed(1)}%
         </div>
         ${x.range52?`<div class="screen-range">${x.range52.full52?"52W":"履歴内"}高値から ${x.range52.fromHigh.toFixed(1)}% / 安値から +${x.range52.fromLow.toFixed(1)}%</div>`:""}
-        ${(()=>{
-          const emp=empiricalForResult(r);
-          return emp?`<div class="screen-range">実績: 20D勝率 ${emp.stats.winRate.toFixed(0)}% / 平均 ${emp.stats.avgReturn>=0?"+":""}${emp.stats.avgReturn.toFixed(1)}% / n=${emp.stats.n}</div>`:"";
-        })()}
+        ${x.empirical?`<div class="screen-range">
+          類似実績: Score ${x.empirical.empiricalScore.toFixed(0)} / 20D勝率 ${x.empirical.stats.winRate.toFixed(0)}% /
+          平均 ${x.empirical.stats.avgReturn>=0?"+":""}${x.empirical.stats.avgReturn.toFixed(1)}% /
+          n=${x.empirical.stats.n}・${x.empirical.modeLabel}
+        </div>`:""}
       </div>`;
     }).join("");
 
@@ -2132,18 +2329,28 @@
 
       ${r.divAdj!==0?`<div class="level"><span>ダイバージェンス補正</span><strong class="${r.divAdj>0?"up":"down"}">${r.divAdj>0?"+":""}${r.divAdj.toFixed(1)}</strong></div>`:""}
       ${(()=>{
-        const emp=empiricalForResult(r);
-        if(!emp) return `<div class="empirical"><div class="title">実績ベースの信頼度</div><div class="foot">スクリーナーの「スコア校正」を実行すると、ここに過去実績が表示されます。</div></div>`;
-        const q=calibrationQuality(emp.stats.n);
-        const top=emp.matching.slice(0,2);
+        const emp=empiricalForResult(r,symbol);
+        if(!emp) return `<div class="empirical"><div class="title">Similarity Calibration 2.0</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        const b=emp.baseline;
         return `<div class="empirical">
-          <div class="title">実績ベース：Timing ${emp.bucket} <span class="cal-badge ${q.cls}">信頼度 ${q.label}</span></div>
+          <div class="title">
+            類似局面実績 ・ ${emp.modeLabel}
+            <span class="cal-badge ${emp.quality.cls}">信頼度 ${emp.quality.label}</span>
+          </div>
           <div class="numbers">
+            <div class="nbox"><div class="k">実績スコア</div><div class="v">${emp.empiricalScore.toFixed(0)}</div></div>
             <div class="nbox"><div class="k">20Dプラス率</div><div class="v ${emp.stats.winRate>=60?"bt-good":emp.stats.winRate<45?"bt-bad":"bt-mid"}">${emp.stats.winRate.toFixed(0)}%</div></div>
             <div class="nbox"><div class="k">平均リターン</div><div class="v ${emp.stats.avgReturn>=0?"bt-good":"bt-bad"}">${emp.stats.avgReturn>=0?"+":""}${emp.stats.avgReturn.toFixed(1)}%</div></div>
-            <div class="nbox"><div class="k">サンプル</div><div class="v">${emp.stats.n}</div></div>
+            <div class="nbox"><div class="k">2R先着率</div><div class="v">${emp.stats.tpRate.toFixed(0)}%</div></div>
+            <div class="nbox"><div class="k">SL先着率</div><div class="v">${emp.stats.slRate.toFixed(0)}%</div></div>
+            <div class="nbox"><div class="k">類似サンプル</div><div class="v">${emp.stats.n}</div></div>
           </div>
-          ${top.length?`<div class="foot">${top.map(x=>`${x.name}: 勝率${x.stats.winRate.toFixed(0)}% / 平均${x.stats.avgReturn>=0?"+":""}${x.stats.avgReturn.toFixed(1)}% / n=${x.stats.n}`).join("<br>")}</div>`:""}
+          <div class="foot">
+            平均類似度 ${emp.avgSimilarity.toFixed(0)}% / ${emp.symbols}銘柄 /
+            Entry ${emp.entryLabel}<br>
+            ${b&&b.n?`同モードのTiming ${emp.bucket}全体: 勝率${b.winRate.toFixed(0)}% / 平均${b.avgReturn>=0?"+":""}${b.avgReturn.toFixed(1)}% / n=${b.n}`:"同Timing帯の基準値はサンプル不足"}<br>
+            現在条件: ${emp.currentConditions.length?emp.currentConditions.slice(0,5).join(" / "):"特記事項なし"}
+          </div>
         </div>`;
       })()}
       <div class="metric-reason" style="margin-top:10px;">
