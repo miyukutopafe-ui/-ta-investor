@@ -681,6 +681,43 @@
       margin-top:7px;padding-top:7px;border-top:1px solid rgba(255,255,255,.055);
       font-size:7px;color:var(--muted);line-height:1.5;
     }
+    .entry-decision-main{
+      display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;
+      align-items:start;
+    }
+    .entry-decision-score{
+      display:flex;align-items:center;gap:5px;white-space:nowrap;
+    }
+    .entry-decision-num{
+      font-size:17px;font-weight:1000;line-height:1;color:var(--text);
+    }
+    .entry-alt-box{
+      margin-top:8px;padding:8px;border-radius:9px;
+      background:rgba(255,255,255,.025);
+      border:1px solid rgba(255,255,255,.07);
+    }
+    .entry-alt-head{
+      display:flex;align-items:center;justify-content:space-between;gap:6px;
+      margin-bottom:6px;
+    }
+    .entry-alt-title{font-size:8px;font-weight:950;color:var(--text)}
+    .entry-alt-badge{
+      font-size:7px;font-weight:900;padding:2px 6px;border-radius:999px;
+      border:1px solid rgba(83,211,255,.22);color:#b8e9f8;white-space:nowrap;
+    }
+    .entry-alt-badge.good{
+      border-color:rgba(104,227,193,.24);color:#bfead9;
+    }
+    .entry-alt-badge.warn{
+      border-color:rgba(255,193,94,.28);color:#ffd58b;
+    }
+    .entry-alt-grid{
+      display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:5px 10px;font-size:7px;color:var(--muted);
+    }
+    .entry-alt-grid strong{color:var(--text)}
+    .entry-alt-grid .good strong{color:var(--green)}
+    .entry-alt-grid .bad strong{color:var(--red)}
     .wait-compare-table tr.zone td{
       background:rgba(83,211,255,.035);
     }
@@ -697,7 +734,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.24.2</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24.3</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -914,7 +951,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.24.2";
+  const APP_BUILD = "0.24.3";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -3189,6 +3226,160 @@
       }
     }
 
+    // v0.24.3:
+    // Separate "exact best point" from the practical decision:
+    // buy now, or wait for a pullback. Confidence is based on sample size,
+    // the lead over the runner-up, local dominance and execution rate.
+    let recommendation=null;
+    let alternative=null;
+
+    if(best&&dense.length){
+      const ranked=[...dense].sort((a,b)=>b.objective-a.objective);
+      const second=ranked.find(x=>Math.abs(x.waitPct-best.waitPct)>0.05)||null;
+      const gap=second?Math.max(0,best.objective-second.objective):Math.max(0,best.objective);
+
+      const samplePts=
+        schemaRows.length>=40?25:
+        schemaRows.length>=30?23:
+        schemaRows.length>=20?19:
+        schemaRows.length>=12?14:8;
+
+      const gapPts=
+        gap>=3?45:
+        gap>=2?38:
+        gap>=1?28:
+        gap>=0.5?18:
+        gap>=0.2?10:5;
+
+      let localPts=0;
+      if(best.waitPct===0){
+        const shallow=dense.filter(x=>x.waitPct>0&&x.waitPct<=2);
+        if(shallow.length){
+          const dominated=shallow.filter(x=>x.objective<=best.objective+1e-9).length;
+          localPts=Math.round(15*dominated/shallow.length);
+        }else{
+          localPts=8;
+        }
+      }else{
+        const neighbors=dense.filter(x=>
+          x.waitPct!==best.waitPct &&
+          Math.abs(x.waitPct-best.waitPct)<=1.0
+        );
+        if(neighbors.length){
+          const tol=Math.max(0.75,Math.abs(best.objective)*0.10);
+          const stable=neighbors.filter(x=>x.objective>=best.objective-tol).length;
+          localPts=Math.round(15*stable/neighbors.length);
+        }else{
+          localPts=6;
+        }
+      }
+
+      const fillPts=best.isImmediate
+        ? 15
+        : best.fillRate>=85?15:
+          best.fillRate>=70?13:
+          best.fillRate>=55?10:
+          best.fillRate>=40?7:4;
+
+      const confidenceScore=Math.max(0,Math.min(100,samplePts+gapPts+localPts+fillPts));
+      const confidence=
+        confidenceScore>=75?"高":
+        confidenceScore>=55?"中":"低";
+
+      recommendation={
+        kind:best.isImmediate?"immediate":"wait",
+        label:best.isImmediate
+          ? "即買い"
+          : (entryZone
+              ? (entryZone.from===0
+                  ? `即買い〜-${entryZone.to.toFixed(1)}%`
+                  : Math.abs(entryZone.from-entryZone.to)<0.05
+                    ? `-${entryZone.from.toFixed(1)}%前後`
+                    : `-${entryZone.from.toFixed(1)}〜-${entryZone.to.toFixed(1)}%`)
+              : `-${best.waitPct.toFixed(1)}%待ち`),
+        confidence,
+        confidenceScore,
+        lead:round1(gap),
+        sampleN:schemaRows.length,
+        winRate:entryZone&&!best.isImmediate?entryZone.avgWinRate:best.winRate,
+        fillRate:entryZone&&!best.isImmediate?entryZone.avgFillRate:best.fillRate,
+        avgReturn:entryZone&&!best.isImmediate?entryZone.avgReturn:best.avgReturn,
+        perSignalAvg:entryZone&&!best.isImmediate?entryZone.avgPerSignal:best.perSignalAvg
+      };
+
+      if(best.isImmediate){
+        const waits=dense.filter(x=>
+          !x.isImmediate &&
+          x.waitPct>0 &&
+          x.fillN>=8 &&
+          x.fillRate>=30
+        );
+
+        if(waits.length){
+          const altBest=[...waits].sort((a,b)=>b.objective-a.objective)[0];
+          const sortedWaits=[...waits].sort((a,b)=>a.waitPct-b.waitPct);
+          const idx=sortedWaits.findIndex(x=>Math.abs(x.waitPct-altBest.waitPct)<0.05);
+          const tol=Math.max(0.6,Math.abs(altBest.objective)*0.08);
+          const threshold=altBest.objective-tol;
+
+          const qualifies=x=>x.objective>=threshold&&x.fillRate>=30&&x.fillN>=8;
+          let left=idx,right=idx;
+
+          while(left>0){
+            const prev=sortedWaits[left-1],cur=sortedWaits[left];
+            if(Math.abs((cur.waitPct-prev.waitPct)-0.5)>0.06||!qualifies(prev)) break;
+            left--;
+          }
+          while(right<sortedWaits.length-1){
+            const cur=sortedWaits[right],next=sortedWaits[right+1];
+            if(Math.abs((next.waitPct-cur.waitPct)-0.5)>0.06||!qualifies(next)) break;
+            right++;
+          }
+
+          const zone=sortedWaits.slice(left,right+1).filter(qualifies);
+          if(zone.length){
+            const from=Math.min(...zone.map(x=>x.waitPct));
+            const to=Math.max(...zone.map(x=>x.waitPct));
+            const perSignal=round1(avg(zone.map(x=>x.perSignalAvg)));
+            const gapVsPrimary=round1(recommendation.perSignalAvg-perSignal);
+
+            alternative={
+              kind:"pullback",
+              label:Math.abs(from-to)<0.05
+                ? `-${from.toFixed(1)}%前後`
+                : `-${from.toFixed(1)}〜-${to.toFixed(1)}%`,
+              bestWait:altBest.waitPct,
+              fillRate:round1(avg(zone.map(x=>x.fillRate))),
+              winRate:round1(avg(zone.map(x=>x.winRate))),
+              avgReturn:round1(avg(zone.map(x=>x.avgReturn))),
+              perSignalAvg:perSignal,
+              missedRate:round1(100-avg(zone.map(x=>x.fillRate))),
+              gapVsPrimary,
+              quality:
+                gapVsPrimary<=0.75?"有力代替":
+                gapVsPrimary<=2.0?"代替可":"期待値低下"
+            };
+          }
+        }
+      }else if(immediate.available){
+        const gapVsPrimary=round1(recommendation.perSignalAvg-immediate.perSignalAvg);
+        alternative={
+          kind:"immediate",
+          label:"即買い",
+          bestWait:0,
+          fillRate:100,
+          winRate:immediate.winRate,
+          avgReturn:immediate.avgReturn,
+          perSignalAvg:immediate.perSignalAvg,
+          missedRate:0,
+          gapVsPrimary,
+          quality:
+            gapVsPrimary<=0.75?"有力代替":
+            gapVsPrimary<=2.0?"代替可":"期待値低下"
+        };
+      }
+    }
+
     // Fine comparison requested for practical use.
     // T-SL is always included. Rows deeper than T-SL are reference-only.
     const comparisonRaw=[0,0.5,1,1.5,2,3,4,6,currentSL];
@@ -3267,6 +3458,8 @@
       immediate,
       best,
       entryZone,
+      recommendation,
+      alternative,
       comparisonLevels
     };
   }
@@ -3615,7 +3808,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.24.2）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.24.3）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3922,41 +4115,61 @@
               `:""}
             </div>
 
-            ${w.entryZone?`
+            ${w.recommendation?`
               <div class="entry-zone-box">
-                <div class="entry-zone-top">
+                <div class="entry-decision-main">
                   <div>
-                    <div class="entry-zone-kicker">推奨 Entry Zone</div>
-                    <div class="entry-zone-value">${
-                      w.entryZone.from===0
-                        ? (w.entryZone.to===0
-                            ? "即買い"
-                            : `即買い〜-${w.entryZone.to.toFixed(1)}%`)
-                        : (Math.abs(w.entryZone.from-w.entryZone.to)<0.05
-                            ? `-${w.entryZone.from.toFixed(1)}%前後`
-                            : `-${w.entryZone.from.toFixed(1)}〜-${w.entryZone.to.toFixed(1)}%`)
-                    }</div>
+                    <div class="entry-zone-kicker">エントリー判断</div>
+                    <div class="entry-zone-value">${esc(w.recommendation.label)}</div>
                   </div>
-                  <span class="entry-zone-chip ${w.entryZone.confidence==="低"?"warn":""}">
-                    安定度 ${w.entryZone.confidence}
-                  </span>
+                  <div class="entry-decision-score">
+                    <span class="entry-zone-chip ${w.recommendation.confidence==="低"?"warn":""}">
+                      推奨確度 ${w.recommendation.confidence}
+                    </span>
+                    <span class="entry-decision-num">${w.recommendation.confidenceScore}</span>
+                  </div>
                 </div>
+
                 <div class="entry-zone-grid">
-                  <div>代表Best <strong>${w.entryZone.bestWait===0?"即買い":`-${w.entryZone.bestWait.toFixed(1)}%`}</strong></div>
-                  <div>ゾーン点数 <strong>${w.entryZone.points}</strong></div>
-                  <div>ゾーン平均約定 <strong>${w.entryZone.avgFillRate.toFixed(0)}%</strong></div>
-                  <div class="${w.entryZone.avgWinRate>=60?"good":""}">ゾーン平均勝率 <strong>${w.entryZone.avgWinRate.toFixed(0)}%</strong></div>
-                  <div class="${w.entryZone.avgReturn>=0?"good":""}">約定後平均 <strong>${w.entryZone.avgReturn>=0?"+":""}${w.entryZone.avgReturn.toFixed(1)}%</strong></div>
-                  <div class="${w.entryZone.avgPerSignal>=0?"good":""}">全信号平均 <strong>${w.entryZone.avgPerSignal>=0?"+":""}${w.entryZone.avgPerSignal.toFixed(1)}%</strong></div>
+                  <div>評価サンプル <strong>${w.recommendation.sampleN}</strong></div>
+                  <div>2位との差 <strong>${w.recommendation.lead.toFixed(1)}pt</strong></div>
+                  <div>約定率 <strong>${w.recommendation.fillRate.toFixed(0)}%</strong></div>
+                  <div class="${w.recommendation.winRate>=60?"good":""}">20D勝率 <strong>${w.recommendation.winRate.toFixed(0)}%</strong></div>
+                  <div class="${w.recommendation.avgReturn>=0?"good":""}">約定後平均 <strong>${w.recommendation.avgReturn>=0?"+":""}${w.recommendation.avgReturn.toFixed(1)}%</strong></div>
+                  <div class="${w.recommendation.perSignalAvg>=0?"good":""}">全信号平均 <strong>${w.recommendation.perSignalAvg>=0?"+":""}${w.recommendation.perSignalAvg.toFixed(1)}%</strong></div>
                 </div>
+
+                ${w.alternative?`
+                  <div class="entry-alt-box">
+                    <div class="entry-alt-head">
+                      <div class="entry-alt-title">
+                        ${w.alternative.kind==="pullback"?"押し目代替":"即買い代替"}：
+                        ${esc(w.alternative.label)}
+                      </div>
+                      <span class="entry-alt-badge ${
+                        w.alternative.quality==="有力代替"?"good":
+                        w.alternative.quality==="期待値低下"?"warn":""
+                      }">${esc(w.alternative.quality)}</span>
+                    </div>
+                    <div class="entry-alt-grid">
+                      <div>約定率 <strong>${w.alternative.fillRate.toFixed(0)}%</strong></div>
+                      <div class="${w.alternative.winRate>=60?"good":""}">20D勝率 <strong>${w.alternative.winRate.toFixed(0)}%</strong></div>
+                      <div class="${w.alternative.avgReturn>=0?"good":""}">約定後平均 <strong>${w.alternative.avgReturn>=0?"+":""}${w.alternative.avgReturn.toFixed(1)}%</strong></div>
+                      <div class="${w.alternative.perSignalAvg>=0?"good":""}">全信号平均 <strong>${w.alternative.perSignalAvg>=0?"+":""}${w.alternative.perSignalAvg.toFixed(1)}%</strong></div>
+                      <div>取り逃し率 <strong>${w.alternative.missedRate.toFixed(0)}%</strong></div>
+                      <div class="${w.alternative.gapVsPrimary<=0.75?"good":w.alternative.gapVsPrimary>2?"bad":""}">
+                        推奨との差 <strong>${w.alternative.gapVsPrimary>=0?"-":"+"}${Math.abs(w.alternative.gapVsPrimary).toFixed(1)}pt</strong>
+                      </div>
+                    </div>
+                  </div>
+                `:""}
+
                 <div class="entry-zone-foot">
-                  単一の「最適値」ではなく、全シグナル換算成績がBestの約90%以内
-                  （最低でも0.75pt以内）を保つ連続帯をEntry Zoneとして表示します。
-                  ${w.entryZone.atLowerBoundary
-                    ? " 今回は即買いが探索上のBestです。無理に押し目待ちをする優位性は確認されていません。"
-                    : w.entryZone.atFirstWaitBoundary
-                      ? " Bestが最初の待ち幅-0.5%にあります。ほぼ即買いに近い浅い押しが有利な可能性があります。"
-                      : ""}
+                  推奨確度は、サンプル数・Bestと2位の差・周辺水準での優位性・約定率を合成して判定します。
+                  ${w.recommendation.kind==="immediate"
+                    ? " 即買いがBestでも、浅い押し目との差が小さい場合は確度を下げ、実用的な押し目代替を併記します。"
+                    : " 押し目待ちがBestの場合は、単一点ではなく周辺の安定帯を優先します。"}
+                  T-SLは引き続き「買い場」ではなく、保有後の撤退基準として別管理します。
                 </div>
               </div>
             `:""}
@@ -5531,7 +5744,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0242.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0243.js",{
           updateViaCache:"none"
         });
         await reg.update();
