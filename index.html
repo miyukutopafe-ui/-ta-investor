@@ -2528,6 +2528,18 @@
     const modeBuckets=cal.modeBuckets?.[f.m]||{};
     const baseline=modeBuckets[bucket]||null;
 
+    // v0.22.3:
+    // The common analog layer also needs an explicitly defined SL analysis.
+    // v0.22 accidentally returned an undeclared identifier here, which caused
+    // Safari to abort screener calibration rendering for every symbol.
+    const slAnalysis=publishable
+      ? analyzeTacticalStop(
+          rows,
+          Number(f.sl||r.tradePlan?.stopDistancePct||0),
+          Number(r.tradePlan?.structuralStopDistancePct||0)
+        )
+      : null;
+
     return {
       feature:f,
       mode:f.m,
@@ -2997,7 +3009,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.22.2）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.22.3）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3316,7 +3328,7 @@
 
     if(screenerCalibrationError){
       bar.className="calibration-status error";
-      bar.innerHTML=`Calibration計算エラー：${esc(screenerCalibrationError)}<br>銘柄表示は維持しています。下の「類似校正」でも再実行できます。`;
+      bar.innerHTML=`類似実績/SL最適化の計算エラー：${esc(screenerCalibrationError)}<br>銘柄表示は維持しています。修正後は「再計算＋校正」で再実行できます。`;
       btn.textContent="再計算＋校正";
       return;
     }
