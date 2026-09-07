@@ -598,6 +598,58 @@
     .wait-entry-delta strong.good{color:var(--green)}
     .wait-entry-delta strong.bad{color:var(--red)}
     .wait-entry-note{margin-top:6px;font-size:7px;color:var(--muted)}
+    .wait-compare{
+      margin-top:8px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px;
+    }
+    .wait-compare-title{
+      display:flex;align-items:center;justify-content:space-between;gap:8px;
+      margin-bottom:5px;font-size:7px;color:var(--muted);font-weight:900;
+    }
+    .wait-compare-table{
+      width:100%;border-collapse:separate;border-spacing:0 4px;
+      table-layout:fixed;font-size:7px;
+    }
+    .wait-compare-table th{
+      color:var(--muted);font-weight:800;text-align:right;padding:0 4px 2px;
+    }
+    .wait-compare-table th:first-child,
+    .wait-compare-table td:first-child{text-align:left}
+    .wait-compare-table td{
+      padding:6px 4px;text-align:right;
+      background:rgba(255,255,255,.025);
+      border-top:1px solid rgba(255,255,255,.04);
+      border-bottom:1px solid rgba(255,255,255,.04);
+    }
+    .wait-compare-table td:first-child{
+      border-left:1px solid rgba(255,255,255,.04);
+      border-radius:7px 0 0 7px;font-weight:900;color:var(--text);
+    }
+    .wait-compare-table td:last-child{
+      border-right:1px solid rgba(255,255,255,.04);
+      border-radius:0 7px 7px 0;
+    }
+    .wait-compare-table tr.current td{
+      background:rgba(83,211,255,.055);
+      border-top-color:rgba(83,211,255,.16);
+      border-bottom-color:rgba(83,211,255,.16);
+    }
+    .wait-compare-table tr.best td{
+      background:rgba(104,227,193,.055);
+      border-top-color:rgba(104,227,193,.18);
+      border-bottom-color:rgba(104,227,193,.18);
+    }
+    .wait-compare-tag{
+      display:inline-block;margin-left:3px;padding:1px 4px;border-radius:999px;
+      border:1px solid rgba(104,227,193,.22);color:#bfead9;font-size:6px;font-weight:900;
+      vertical-align:1px;
+    }
+    .wait-ref-box{
+      margin-top:8px;padding:8px;border-radius:9px;
+      border:1px solid rgba(255,193,94,.18);
+      background:rgba(255,193,94,.035);
+      color:var(--muted);font-size:7px;line-height:1.55;
+    }
+    .wait-ref-box strong{color:var(--text)}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -608,7 +660,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.24</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24.1</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -825,7 +877,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.24";
+  const APP_BUILD = "0.24.1";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -2999,6 +3051,43 @@
       }
     }
 
+    const comparisonRaw=[2,4,6,currentSL];
+    const comparisonLevels=[];
+    for(const level of comparisonRaw){
+      const v=round1(Number(level||0));
+      if(!(v>0)) continue;
+      if(comparisonLevels.some(x=>Math.abs(x.waitPct-v)<0.05)) continue;
+      const sim=simulateWaitEntrySet(schemaRows,v,cancelPct,maxWaitDays,holdDays);
+      if(!sim?.available) continue;
+      comparisonLevels.push({
+        waitPct:v,
+        isCurrent:Math.abs(v-currentSL)<0.05,
+        beyondCurrent:v>currentSL+0.05,
+        ...sim
+      });
+    }
+
+    if(best && !comparisonLevels.some(x=>Math.abs(x.waitPct-best.waitPct)<0.05)){
+      const sim=simulateWaitEntrySet(
+        schemaRows,best.waitPct,cancelPct,maxWaitDays,holdDays
+      );
+      if(sim?.available){
+        comparisonLevels.push({
+          waitPct:best.waitPct,
+          isCurrent:Math.abs(best.waitPct-currentSL)<0.05,
+          beyondCurrent:best.waitPct>currentSL+0.05,
+          isBest:true,
+          ...sim
+        });
+      }
+    }
+
+    for(const x of comparisonLevels){
+      if(best && Math.abs(x.waitPct-best.waitPct)<0.05) x.isBest=true;
+    }
+
+    comparisonLevels.sort((a,b)=>a.waitPct-b.waitPct);
+
     return {
       available:!!current?.available,
       reason:current?.reason||"",
@@ -3008,7 +3097,8 @@
       holdDays,
       rowsN:schemaRows.length,
       current,
-      best
+      best,
+      comparisonLevels
     };
   }
 
@@ -3356,7 +3446,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.24）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.24.1）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3602,10 +3692,18 @@
       : "";
 
     if(emp.referenceOut||emp.empiricalScore==null){
+      const refSl=Number(emp.feature?.sl||0);
       return `<div class="strategy-emp out">
         戦略実績：参考外 / ${esc(emp.reason||"比較データ不足")} /
         類似 ${emp.selectedCount||0}/${emp.candidateCount||0}
         ${arch}
+        <div class="wait-ref-box">
+          <strong>T-SL待ちエントリー検証：参考外</strong><br>
+          ${refSl>0?`現在のT-SLは -${refSl.toFixed(1)}%。`:""}
+          ${esc(emp.reason||"十分に似た過去局面がありません。")}
+          のため、勝率や最適待ち水準は表示しません。
+          条件を緩めて数字だけ出すと選択バイアスが強くなるため、ここでは「未評価」としています。
+        </div>
       </div>`;
     }
 
@@ -3654,6 +3752,52 @@
                 <div>その約定率 <strong>${w.best.fillRate.toFixed(0)}%</strong></div>
               `:""}
             </div>
+
+            ${Array.isArray(w.comparisonLevels)&&w.comparisonLevels.length
+              ? `<div class="wait-compare">
+                  <div class="wait-compare-title">
+                    <span>待ち幅比較</span>
+                    <span>未約定＝現金0%</span>
+                  </div>
+                  <table class="wait-compare-table">
+                    <thead>
+                      <tr>
+                        <th>待ち</th>
+                        <th>約定</th>
+                        <th>勝率</th>
+                        <th>平均</th>
+                        <th>全信号</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${w.comparisonLevels.map(x=>`
+                        <tr class="${x.isBest?"best":x.isCurrent?"current":""}">
+                          <td>
+                            -${x.waitPct.toFixed(1)}%
+                            ${x.isCurrent?`<span class="wait-compare-tag">T-SL</span>`:""}
+                            ${x.isBest?`<span class="wait-compare-tag">最適</span>`:""}
+                          </td>
+                          <td>${x.fillRate.toFixed(0)}%</td>
+                          <td>${x.winRate.toFixed(0)}%</td>
+                          <td style="color:${x.avgReturn>=0?"var(--green)":"var(--red)"}">
+                            ${x.avgReturn>=0?"+":""}${x.avgReturn.toFixed(1)}%
+                          </td>
+                          <td style="color:${x.perSignalAvg>=0?"var(--green)":"var(--red)"}">
+                            ${x.perSignalAvg>=0?"+":""}${x.perSignalAvg.toFixed(1)}%
+                          </td>
+                        </tr>
+                      `).join("")}
+                    </tbody>
+                  </table>
+                  <div class="wait-entry-note">
+                    「平均」は約定したケースだけの20D平均。「全信号」は未約定を0%として含めた平均です。
+                    ${w.comparisonLevels.some(x=>x.beyondCurrent)
+                      ? ` 現T-SLより深い待ち水準は、現在のセットアップなら本来損切り域を超えるため参考値です。`
+                      : ""}
+                  </div>
+                </div>`
+              : ""}
+
             <div class="wait-entry-note">
               条件：シグナル後${w.maxWaitDays}営業日以内に、元の2Rより先に待ち水準へ到達した場合だけ約定。
               そこから${w.holdDays}営業日後を評価します。同一日に上側/下側の両方へ触れたケースは順序不明のため除外。
@@ -5171,7 +5315,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v024.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0241.js",{
           updateViaCache:"none"
         });
         await reg.update();
