@@ -472,6 +472,26 @@
     .strategy-stat strong{color:var(--text)}
     .strategy-stat.good strong{color:var(--green)}
     .strategy-stat.bad strong{color:var(--red)}
+    .calibration-status{
+      margin:8px 0 10px;padding:9px 10px;border-radius:12px;
+      border:1px solid var(--line);background:var(--panel);
+      font-size:10px;line-height:1.45;color:var(--muted);
+    }
+    .calibration-status.ok{
+      border-color:rgba(104,227,193,.28);
+      background:rgba(104,227,193,.05);
+      color:#bfead9;
+    }
+    .calibration-status.warn{
+      border-color:rgba(255,216,107,.28);
+      background:rgba(255,216,107,.05);
+      color:#f1dda0;
+    }
+    .calibration-status.error{
+      border-color:rgba(255,95,103,.28);
+      background:rgba(255,95,103,.05);
+      color:#ffc0c3;
+    }
     .sl-opt-box{
       margin-top:8px;padding:8px 9px;border-radius:10px;
       border:1px solid rgba(74,216,255,.14);
@@ -543,6 +563,7 @@
           </div>
           <button class="secondary" id="scanRefreshBtn">再計算</button>
         </div>
+        <div id="calibrationStatusBar" class="calibration-status"></div>
 
         <div class="preset-scroll">
           <button class="preset active" data-preset="all">すべて</button>
@@ -735,6 +756,7 @@
   let chartPeriod = 126;
   let chartCrosshair = {active:false,index:null,date:null};
   let chartLongPressTimer = null;
+  let screenerCalibrationError = null;
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -2880,6 +2902,13 @@
     };
 
     store.calibration=calibration;
+
+    const persisted=store.calibration;
+    if(!persisted || persisted.version!=="v0.22" || !Array.isArray(persisted.samplesCompact) || persisted.samplesCompact.length!==allRows.length){
+      throw new Error("Calibrationデータを端末へ保存できませんでした。Safariの保存容量を確認してください。");
+    }
+
+    screenerCalibrationError=null;
     $("calProgress").textContent=
       `完了：${usable.length}銘柄 / ${allRows.length}サンプル（フル ${calibration.modeSamples.F} / 短期 ${calibration.modeSamples.S}）。`;
     renderCalibrationResults(calibration);
@@ -2887,6 +2916,7 @@
     btn.textContent="再校正";
 
     if(listMode==="screen") renderScreener();
+    return calibration;
   }
 
   function renderModeCalibration(mode,calibration){
@@ -2967,7 +2997,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.22.2）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3266,6 +3296,44 @@
     </div>`;
   }
 
+
+  function calibrationReady(){
+    const cal=store.calibration;
+    return !!(
+      cal &&
+      cal.version==="v0.22" &&
+      Array.isArray(cal.samplesCompact) &&
+      cal.samplesCompact.length>0
+    );
+  }
+
+  function updateCalibrationStatusUI(){
+    const bar=$("calibrationStatusBar");
+    const btn=$("scanRefreshBtn");
+    if(!bar||!btn) return;
+
+    const cal=store.calibration;
+
+    if(screenerCalibrationError){
+      bar.className="calibration-status error";
+      bar.innerHTML=`Calibration計算エラー：${esc(screenerCalibrationError)}<br>銘柄表示は維持しています。下の「類似校正」でも再実行できます。`;
+      btn.textContent="再計算＋校正";
+      return;
+    }
+
+    if(!calibrationReady()){
+      bar.className="calibration-status warn";
+      bar.innerHTML=`v0.22のSL最適化はまだ未有効です。<strong>「再計算＋校正」</strong>を1回押すと、戦略実績・勝ち組MAE・推奨T-SL帯・現SL EVまで表示します。`;
+      btn.textContent="再計算＋校正";
+      return;
+    }
+
+    bar.className="calibration-status ok";
+    const when=cal.generatedAt ? new Date(cal.generatedAt).toLocaleString("ja-JP") : "日時不明";
+    bar.innerHTML=`Strategy Calibration 3.2 有効 ・ ${cal.symbols?.length||0}銘柄 / ${cal.samples||cal.samplesCompact.length}サンプル<br>SL最適化：有効（勝ち組MAE / 推奨T-SL / 2R・SL先着 / R期待値） ・ 校正 ${esc(when)}`;
+    btn.textContent="再計算";
+  }
+
   // ---------- Rendering ----------
 
   function screenMetrics(item){
@@ -3312,14 +3380,17 @@
 
       let empiricalBundle={generic:null,trend:null,reversal:null};
       let empirical=null;
+      let calibrationError=null;
 
       try{
-        if(store.calibration?.version==="v0.22"){
+        if(calibrationReady()){
           empiricalBundle=strategyEmpiricals(r,item.symbol) || empiricalBundle;
           empirical=empiricalBundle.generic||null;
         }
       }catch(err){
         console.warn("Screener calibration failed:",item.symbol,err);
+        calibrationError=String(err.message||err);
+        screenerCalibrationError=calibrationError;
         empiricalBundle={generic:null,trend:null,reversal:null};
         empirical=null;
       }
@@ -3345,7 +3416,8 @@
         empiricalBundle,
         priority,
         fallbackResult:!!evalError,
-        evalError:evalError?String(evalError.message||evalError):null
+        evalError:evalError?String(evalError.message||evalError):null,
+        calibrationError
       };
     }catch(err){
       console.warn("Screener metrics failed:",item.symbol,err);
@@ -3360,7 +3432,8 @@
           empiricalBundle:{generic:null,trend:null,reversal:null},
           priority,
           fallbackResult:true,
-          evalError:String(err.message||err)
+          evalError:String(err.message||err),
+          calibrationError:null
         };
       }catch{
         return null;
@@ -3459,6 +3532,7 @@
     $("scanCount").textContent=rows.length;
     $("scanMatch").textContent=matched.length;
     $("scanMissing").textContent=missing;
+    updateCalibrationStatusUI();
     renderCalibrationResults(store.calibration);
 
     if(!matched.length){
@@ -3515,14 +3589,18 @@
             <div class="v">${Math.round(x.priority.trend.score)}</div>
             <div class="label">${x.priority.trend.label}</div>
             <div class="reason">${x.priority.trend.reasons.slice(0,4).join(" / ")}</div>
-            ${strategyEmpiricalText(x.priority.trend.empirical)}
+            ${x.calibrationError
+              ? `<div class="strategy-emp out">戦略実績：校正計算エラー</div>`
+              : strategyEmpiricalText(x.priority.trend.empirical)}
           </div>
           <div class="strategy-card ${x.priority.type==="reversal"?"best":""}">
             <div class="k">反転優先度</div>
             <div class="v">${Math.round(x.priority.reversal.score)}</div>
             <div class="label">${x.priority.reversal.label}</div>
             <div class="reason">${x.priority.reversal.reasons.slice(0,4).join(" / ")}</div>
-            ${strategyEmpiricalText(x.priority.reversal.empirical)}
+            ${x.calibrationError
+              ? `<div class="strategy-emp out">戦略実績：校正計算エラー</div>`
+              : strategyEmpiricalText(x.priority.reversal.empirical)}
           </div>
         </div>
         <div class="strategy-summary">
@@ -4126,7 +4204,10 @@
   });
 
   $("watchTabBtn").addEventListener("click",()=>setListMode("watch"));
-  $("screenTabBtn").addEventListener("click",()=>setListMode("screen"));
+  $("screenTabBtn").addEventListener("click",()=>{
+    setListMode("screen");
+    updateCalibrationStatusUI();
+  });
 
   document.querySelectorAll(".preset").forEach(btn=>{
     btn.addEventListener("click",()=>{
@@ -4142,14 +4223,23 @@
   });
 
   $("runCalibrationBtn").addEventListener("click",()=>{
+    screenerCalibrationError=null;
     runCalibration().catch(e=>{
-      $("calProgress").textContent=`校正中にエラー: ${e.message||String(e)}`;
+      screenerCalibrationError=e.message||String(e);
+      $("calProgress").textContent=`校正中にエラー: ${screenerCalibrationError}`;
       $("runCalibrationBtn").disabled=false;
-      $("runCalibrationBtn").textContent="校正";
+      $("runCalibrationBtn").textContent="類似校正";
+      updateCalibrationStatusUI();
+      renderScreener();
     });
   });
 
-  $("scanRefreshBtn").addEventListener("click",()=>{
+  $("scanRefreshBtn").addEventListener("click",async()=>{
+    const btn=$("scanRefreshBtn");
+    btn.disabled=true;
+    const needsCalibration=!calibrationReady();
+    btn.textContent="再計算中";
+
     let rebuilt=0;
     for(const item of watchlist){
       const c=cache[item.symbol];
@@ -4162,9 +4252,33 @@
         console.warn("Cached recalculation failed:",item.symbol,err);
       }
     }
-    try{ store.cache=cache; }catch(err){ console.warn("Cache save failed:",err); }
-    renderScreener();
-    toast(`取得済みデータを再計算しました（${rebuilt}銘柄）`);
+
+    try{
+      store.cache=cache;
+    }catch(err){
+      console.warn("Cache save failed:",err);
+    }
+
+    if(needsCalibration){
+      try{
+        screenerCalibrationError=null;
+        await runCalibration();
+        toast(`再計算＋校正が完了しました（${rebuilt}銘柄）`);
+      }catch(err){
+        screenerCalibrationError=err.message||String(err);
+        $("calProgress").textContent=`校正中にエラー: ${screenerCalibrationError}`;
+        $("runCalibrationBtn").disabled=false;
+        $("runCalibrationBtn").textContent="類似校正";
+        renderScreener();
+        toast("銘柄の再計算は完了しましたが、類似校正でエラーが発生しました");
+      }
+    }else{
+      renderScreener();
+      toast(`取得済みデータを再計算しました（${rebuilt}銘柄）`);
+    }
+
+    btn.disabled=false;
+    updateCalibrationStatusUI();
   });
 
   $("settingsBtn").addEventListener("click",openSettings);
