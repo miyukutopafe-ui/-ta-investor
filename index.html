@@ -572,6 +572,32 @@
     }
     .sl-opt-grid strong{color:var(--text)}
     .sl-opt-note{margin-top:5px;font-size:7px;color:var(--muted)}
+    .wait-entry-box{
+      margin-top:8px;padding:9px;border-radius:10px;
+      border:1px solid rgba(104,227,193,.18);
+      background:rgba(104,227,193,.035);
+      font-size:8px;color:var(--muted);line-height:1.5;
+    }
+    .wait-entry-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .wait-entry-title{font-weight:950;color:var(--text)}
+    .wait-entry-chip{
+      display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+      border:1px solid rgba(104,227,193,.24);color:#bfead9;font-weight:900;white-space:nowrap;
+    }
+    .wait-entry-grid{
+      display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:5px 10px;margin-top:7px;
+    }
+    .wait-entry-grid strong{color:var(--text)}
+    .wait-entry-grid .good strong{color:var(--green)}
+    .wait-entry-grid .bad strong{color:var(--red)}
+    .wait-entry-delta{
+      margin-top:7px;padding:6px 7px;border-radius:8px;
+      background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.045);
+    }
+    .wait-entry-delta strong.good{color:var(--green)}
+    .wait-entry-delta strong.bad{color:var(--red)}
+    .wait-entry-note{margin-top:6px;font-size:7px;color:var(--muted)}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -582,7 +608,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.23</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -799,7 +825,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.23";
+  const APP_BUILD = "0.24";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -2367,14 +2393,15 @@
     };
   }
 
-  async function calibrationSnapshotsForSymbol(symbol,candles,horizon=20,step=5){
+  async function calibrationSnapshotsForSymbol(symbol,candles,horizon=20,step=5,pathHorizon=40){
     const rows=[];
     let processed=0;
     // Important: a long-listed stock must NOT be treated as "short mode"
     // just because we truncated its historical slice.
     const genuineMode=candles.length<220?"S":"F";
     const minBars=genuineMode==="S"?35:220;
-    const end=candles.length-1-horizon;
+    const effectivePathHorizon=Math.max(horizon,pathHorizon);
+    const end=candles.length-1-effectivePathHorizon;
     if(end<minBars-1) return rows;
 
     for(let i=minBars-1;i<=end;i+=step){
@@ -2384,8 +2411,9 @@
         if((r.historyMode==="short"?"S":"F")!==genuineMode) continue;
 
         const entry=candles[i].close;
-        const futureSlice=candles.slice(i+1,i+horizon+1);
-        if(futureSlice.length<horizon) continue;
+        const pathSlice=candles.slice(i+1,i+effectivePathHorizon+1);
+        if(pathSlice.length<effectivePathHorizon) continue;
+        const futureSlice=pathSlice.slice(0,horizon);
         const future=futureSlice[futureSlice.length-1].close;
         const maxHigh=Math.max(...futureSlice.map(c=>c.high));
         const minLow=Math.min(...futureSlice.map(c=>c.low));
@@ -2402,9 +2430,10 @@
           if(hitSL){ firstHit="L"; break; }
         }
 
-        const path=futureSlice.map(c=>[
+        const path=pathSlice.map(c=>[
           round1((c.high-entry)/entry*100),
-          round1((c.low-entry)/entry*100)
+          round1((c.low-entry)/entry*100),
+          round1((c.close-entry)/entry*100)
         ]);
 
         const f=featureFromResult(r);
@@ -2677,7 +2706,7 @@
     if(!row||!Array.isArray(row.p)||!row.p.length||!(stopPct>0)) return null;
     const tpPct=2*stopPct;
 
-    for(const day of row.p){
+    for(const day of row.p.slice(0,20)){
       const hi=Number(day[0]||0);
       const lo=Number(day[1]||0);
       const hitTP=hi>=tpPct;
@@ -2783,6 +2812,206 @@
     };
   }
 
+
+  function waitEntryOne(row,waitPct,cancelPct,maxWaitDays=20,holdDays=20){
+    if(!row||!Array.isArray(row.p)||!row.p.length||!(waitPct>0)) return null;
+
+    const hasClosePath=row.p.length>=maxWaitDays+holdDays-1 &&
+      row.p.some(day=>Array.isArray(day)&&day.length>=3&&Number.isFinite(Number(day[2])));
+    if(!hasClosePath) return {status:"OLD"};
+
+    let fillIndex=-1;
+
+    for(let i=0;i<Math.min(maxWaitDays,row.p.length);i++){
+      const day=row.p[i];
+      const hi=Number(day[0]||0);
+      const lo=Number(day[1]||0);
+      const hitRunaway=hi>=cancelPct;
+      const hitWait=lo<=-waitPct;
+
+      // Daily OHLC cannot tell intraday order.
+      if(hitRunaway&&hitWait) return {status:"B",fillIndex:i};
+      if(hitRunaway) return {status:"R",fillIndex:i};
+      if(hitWait){ fillIndex=i; break; }
+    }
+
+    if(fillIndex<0) return {status:"N"};
+
+    const exitIndex=fillIndex+holdDays-1;
+    if(exitIndex>=row.p.length||!Number.isFinite(Number(row.p[exitIndex]?.[2]))){
+      return {status:"I",fillIndex};
+    }
+
+    const entryFactor=1-waitPct/100;
+    if(!(entryFactor>0)) return null;
+
+    let maxAfter=-Infinity;
+    let minAfter=Infinity;
+
+    for(let i=fillIndex;i<=exitIndex;i++){
+      const day=row.p[i];
+      const hiFactor=1+Number(day[0]||0)/100;
+      const loFactor=1+Number(day[1]||0)/100;
+      const hiRet=(hiFactor/entryFactor-1)*100;
+      const loRet=(loFactor/entryFactor-1)*100;
+      maxAfter=Math.max(maxAfter,hiRet);
+      minAfter=Math.min(minAfter,loRet);
+    }
+
+    const originalExitReturn=Number(row.p[exitIndex][2]||0);
+    const exitFactor=1+originalExitReturn/100;
+    const waitReturn=(exitFactor/entryFactor-1)*100;
+
+    return {
+      status:"F",
+      fillIndex,
+      fillDay:fillIndex+1,
+      waitReturn:round1(waitReturn),
+      originalSameExit:round1(originalExitReturn),
+      mfe:round1(maxAfter),
+      mae:round1(minAfter)
+    };
+  }
+
+  function simulateWaitEntrySet(rows,waitPct,cancelPct,maxWaitDays=20,holdDays=20){
+    const sims=rows.map(row=>({
+      row,
+      sim:waitEntryOne(row,waitPct,cancelPct,maxWaitDays,holdDays)
+    }));
+
+    const oldSchema=sims.filter(x=>x.sim?.status==="OLD").length;
+    const eligible=sims.filter(x=>x.sim&&x.sim.status!=="OLD"&&x.sim.status!=="I");
+
+    if(!eligible.length){
+      return {
+        available:false,
+        reason:oldSchema
+          ? "40日経路がないため再校正が必要です"
+          : "検証できる経路データがありません"
+      };
+    }
+
+    const filled=eligible.filter(x=>x.sim.status==="F");
+    const runaway=eligible.filter(x=>x.sim.status==="R");
+    const ambiguous=eligible.filter(x=>x.sim.status==="B");
+    const noFill=eligible.filter(x=>x.sim.status==="N");
+
+    if(!filled.length){
+      return {
+        available:true,n:eligible.length,fillN:0,fillRate:0,
+        runawayRate:round1(runaway.length/eligible.length*100),
+        ambiguousRate:round1(ambiguous.length/eligible.length*100),
+        noFillRate:round1(noFill.length/eligible.length*100),
+        winRate:0,avgReturn:0,medianReturn:0,avgMfe:0,avgMae:0,
+        sameExitWinRate:0,sameExitAvg:0,winDelta:0,avgDelta:0,
+        perSignalAvg:0,
+        missedWinnerRate:round1(
+          eligible.filter(x=>x.sim.status!=="F"&&Number(x.row.fr||0)>0).length/eligible.length*100
+        ),
+        medianFillDay:0
+      };
+    }
+
+    const waitReturns=filled.map(x=>x.sim.waitReturn);
+    const sameExit=filled.map(x=>x.sim.originalSameExit);
+    const fillDays=filled.map(x=>x.sim.fillDay);
+    const waitWins=waitReturns.filter(x=>x>0).length;
+    const sameWins=sameExit.filter(x=>x>0).length;
+    const avgWait=avg(waitReturns);
+    const avgSame=avg(sameExit);
+
+    return {
+      available:true,
+      n:eligible.length,
+      fillN:filled.length,
+      fillRate:round1(filled.length/eligible.length*100),
+      runawayRate:round1(runaway.length/eligible.length*100),
+      ambiguousRate:round1(ambiguous.length/eligible.length*100),
+      noFillRate:round1(noFill.length/eligible.length*100),
+      winRate:round1(waitWins/filled.length*100),
+      avgReturn:round1(avgWait),
+      medianReturn:round1(median(waitReturns)),
+      avgMfe:round1(avg(filled.map(x=>x.sim.mfe))),
+      avgMae:round1(avg(filled.map(x=>x.sim.mae))),
+      sameExitWinRate:round1(sameWins/filled.length*100),
+      sameExitAvg:round1(avgSame),
+      winDelta:round1(waitWins/filled.length*100-sameWins/filled.length*100),
+      avgDelta:round1(avgWait-avgSame),
+      // Unfilled signals are cash at 0%. This prevents a very deep,
+      // rarely-filled level from looking artificially optimal.
+      perSignalAvg:round1(waitReturns.reduce((a,b)=>a+b,0)/eligible.length),
+      missedWinnerRate:round1(
+        eligible.filter(x=>x.sim.status!=="F"&&Number(x.row.fr||0)>0).length/eligible.length*100
+      ),
+      medianFillDay:round1(median(fillDays))
+    };
+  }
+
+  function analyzeWaitEntry(rows,currentSL,structuralSL){
+    if(!rows.length||!(currentSL>0)) return null;
+
+    const schemaRows=rows.filter(row=>
+      Array.isArray(row.p) &&
+      row.p.length>=39 &&
+      row.p.some(day=>Array.isArray(day)&&day.length>=3&&Number.isFinite(Number(day[2])))
+    );
+
+    if(schemaRows.length<Math.min(10,rows.length)){
+      return {
+        available:false,
+        reason:"v0.24の40日経路データがありません。『再計算＋校正』を1回実行してください。"
+      };
+    }
+
+    const maxWaitDays=20;
+    const holdDays=20;
+    const cancelPct=Math.max(2,2*currentSL);
+
+    const current=simulateWaitEntrySet(
+      schemaRows,currentSL,cancelPct,maxWaitDays,holdDays
+    );
+
+    let maxDepth=Math.max(currentSL,10);
+    if(structuralSL>0) maxDepth=Math.min(15,Math.max(currentSL,structuralSL*.90));
+    else maxDepth=Math.min(15,Math.max(currentSL,currentSL*1.5));
+    maxDepth=Math.max(3,maxDepth);
+
+    let best=null;
+    for(let wait=2;wait<=maxDepth+1e-9;wait+=0.5){
+      const sim=simulateWaitEntrySet(
+        schemaRows,wait,cancelPct,maxWaitDays,holdDays
+      );
+      if(!sim?.available||sim.fillN<8||sim.fillRate<15) continue;
+
+      const qualityPenalty=sim.fillN<12?0.4:0;
+      const objective=sim.perSignalAvg-qualityPenalty;
+
+      if(!best||objective>best.objective){
+        best={
+          waitPct:round1(wait),
+          objective,
+          fillRate:sim.fillRate,
+          fillN:sim.fillN,
+          winRate:sim.winRate,
+          avgReturn:sim.avgReturn,
+          perSignalAvg:sim.perSignalAvg
+        };
+      }
+    }
+
+    return {
+      available:!!current?.available,
+      reason:current?.reason||"",
+      currentSL:round1(currentSL),
+      structuralSL:round1(structuralSL||0),
+      maxWaitDays,
+      holdDays,
+      rowsN:schemaRows.length,
+      current,
+      best
+    };
+  }
+
   function strategyHistoricalSet(r,symbol,strategy){
     const cal=store.calibration;
     if(!cal||cal.version!=="v0.22"||!Array.isArray(cal.samplesCompact)) return null;
@@ -2831,7 +3060,7 @@
       return {
         strategy,referenceOut:true,
         reason:f.m==="S"?"他銘柄の短期モード比較データがありません":"戦略別比較候補がありません",
-        stats:null,empiricalScore:null,slAnalysis:null,selectedCount:0,candidateCount:0,
+        stats:null,empiricalScore:null,slAnalysis:null,waitAnalysis:null,selectedCount:0,candidateCount:0,
         totalModeCandidates,strategyPoolCount,symbols:0,avgSimilarity:0,
         archetype:strategy==="reversal"?(f.ra||"NONE"):null,
         archetypeLabel:strategy==="reversal"?archetypeLabel(f.ra||"NONE"):null,
@@ -2896,12 +3125,15 @@
       ? round1(50+(rawScore-50)*quality.weight)
       : null;
 
+    const currentSL=Number(f.sl||r.tradePlan?.stopDistancePct||0);
+    const structuralSL=Number(r.tradePlan?.structuralStopDistancePct||0);
+
     const slAnalysis=publishable
-      ? analyzeTacticalStop(
-          rows,
-          Number(f.sl||r.tradePlan?.stopDistancePct||0),
-          Number(r.tradePlan?.structuralStopDistancePct||0)
-        )
+      ? analyzeTacticalStop(rows,currentSL,structuralSL)
+      : null;
+
+    const waitAnalysis=publishable
+      ? analyzeWaitEntry(rows,currentSL,structuralSL)
       : null;
 
     return {
@@ -2923,6 +3155,8 @@
       archetypeMode,
       exactArchetypeCount,
       familyArchetypeCount,
+      slAnalysis,
+      waitAnalysis,
       publishable,
       referenceOut:!publishable,
       reason:publishable
@@ -2951,7 +3185,7 @@
     $("calProgress").textContent="Strategy Calibration 3.2 を開始します…";
 
     const allRows=[];
-    const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=55);
+    const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=75);
 
     if(!usable.length){
       $("calProgress").textContent="校正できる銘柄データがありません。まず右上↻でデータを取得してください。";
@@ -2963,7 +3197,7 @@
     for(let i=0;i<usable.length;i++){
       const item=usable[i];
       $("calProgress").textContent=`${i+1}/${usable.length} ${item.symbol} を検証中…`;
-      allRows.push(...await calibrationSnapshotsForSymbol(item.symbol,cache[item.symbol].candles,20,5));
+      allRows.push(...await calibrationSnapshotsForSymbol(item.symbol,cache[item.symbol].candles,20,5,40));
       await new Promise(resolve=>setTimeout(resolve,0));
     }
 
@@ -2999,6 +3233,8 @@
       version:"v0.22",
       horizon:20,
       step:5,
+      pathSchema:2,
+      pathDays:40,
       generatedAt:new Date().toISOString(),
       symbols:usable.map(x=>x.symbol),
       samples:allRows.length,
@@ -3120,7 +3356,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.23）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.24）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3137,8 +3373,9 @@
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
         長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。<br>
         類似実績Scoreの表示条件：類似15件以上・3銘柄以上・平均類似度55%以上。
-        v0.22では各サンプルの20日間の日次High/Low経路も保持し、現在のTactical SLを過去の類似局面へ再適用します。
-        勝ちトレード限定MAEの50/75/90%点、現SL生存率、2R/SL先着、R期待値を計算します。
+        v0.24では各サンプルの40日間の日次High/Low/Close経路を保持します。
+        先頭20日は従来どおりTactical SLの再適用・勝ち組MAE・2R/SL先着・R期待値に使い、
+        追加20日は「元T-SLへ先着したら、その水準で待ち買いした場合」の20営業日後成績を検証します。
         条件未達は「参考外」とし、数値Scoreを表示しません。<br>
         信頼度：A=かなり信頼 / B=参考価値高 / C=参考程度 / —=参考外。
       </div>`;
@@ -3375,6 +3612,57 @@
     const g=empiricalTrustGrade(emp);
     const s=emp.stats;
     const z=emp.slAnalysis;
+    const w=emp.waitAnalysis;
+
+    const waitBox=w?(
+      !w.available
+        ? `<div class="wait-entry-box">
+            <div class="wait-entry-top">
+              <div class="wait-entry-title">T-SL待ちエントリー検証</div>
+              <span class="wait-entry-chip">再校正で有効</span>
+            </div>
+            <div class="wait-entry-note">${esc(w.reason||"v0.24の経路データが必要です。")}</div>
+          </div>`
+        : (()=>{ const q=w.current; const d=Number(q?.winDelta||0); const ad=Number(q?.avgDelta||0);
+          return `<div class="wait-entry-box">
+            <div class="wait-entry-top">
+              <div class="wait-entry-title">T-SL待ちエントリー検証</div>
+              <span class="wait-entry-chip">先着後に買う</span>
+            </div>
+            <div class="wait-entry-grid">
+              <div>待ち水準 <strong>-${w.currentSL.toFixed(1)}%</strong></div>
+              <div>先着約定 <strong>${q.fillRate.toFixed(0)}%</strong>（${q.fillN}/${q.n}）</div>
+              <div class="${q.winRate>=60?"good":q.winRate<45?"bad":""}">約定後20D勝率 <strong>${q.winRate.toFixed(0)}%</strong></div>
+              <div class="${q.avgReturn>=0?"good":"bad"}">約定後平均 <strong>${q.avgReturn>=0?"+":""}${q.avgReturn.toFixed(1)}%</strong></div>
+              <div>平均MFE <strong>+${Math.max(0,q.avgMfe).toFixed(1)}%</strong></div>
+              <div class="bad">平均MAE <strong>${q.avgMae.toFixed(1)}%</strong></div>
+              <div>中央値約定日 <strong>${q.medianFillDay.toFixed(0)}日目</strong></div>
+              <div>全シグナル換算 <strong>${q.perSignalAvg>=0?"+":""}${q.perSignalAvg.toFixed(1)}%</strong></div>
+            </div>
+            <div class="wait-entry-delta">
+              同じSL先着サブセットを同じExit日で比較：
+              即買い勝率 <strong>${q.sameExitWinRate.toFixed(0)}%</strong>
+              → 待ち買い <strong>${q.winRate.toFixed(0)}%</strong>
+              （<strong class="${d>=0?"good":"bad"}">${d>=0?"+":""}${d.toFixed(0)}pt</strong>） /
+              平均差 <strong class="${ad>=0?"good":"bad"}">${ad>=0?"+":""}${ad.toFixed(1)}pt</strong>
+            </div>
+            <div class="wait-entry-grid">
+              <div>上へ走って未約定 <strong>${q.runawayRate.toFixed(0)}%</strong></div>
+              <div>未約定の元20D勝ち <strong>${q.missedWinnerRate.toFixed(0)}%</strong></div>
+              ${w.best?`
+                <div>参考・最適待ち <strong>-${w.best.waitPct.toFixed(1)}%</strong></div>
+                <div>その約定率 <strong>${w.best.fillRate.toFixed(0)}%</strong></div>
+              `:""}
+            </div>
+            <div class="wait-entry-note">
+              条件：シグナル後${w.maxWaitDays}営業日以内に、元の2Rより先に待ち水準へ到達した場合だけ約定。
+              そこから${w.holdDays}営業日後を評価します。同一日に上側/下側の両方へ触れたケースは順序不明のため除外。
+              未約定は現金0%として全シグナル換算を計算します。
+              日足OHLCのため約定は待ち水準ちょうどと仮定しています。
+            </div>
+          </div>`;
+        })()
+    ):"";
 
     const slBox=z?`<div class="sl-opt-box">
       <div class="sl-opt-top">
@@ -3416,6 +3704,7 @@
         <div class="strategy-stat">2R到達 <strong>${s.hit2RRate.toFixed(0)}%</strong></div>
       </div>
       ${slBox}
+      ${waitBox}
     </div>`;
   }
 
@@ -3451,10 +3740,13 @@
       return;
     }
 
-    bar.className="calibration-status ok";
     const when=cal.generatedAt ? new Date(cal.generatedAt).toLocaleString("ja-JP") : "日時不明";
-    bar.innerHTML=`Strategy Calibration 3.2 有効 ・ ${cal.symbols?.length||0}銘柄 / ${cal.samples||cal.samplesCompact.length}サンプル<br>SL最適化：有効（勝ち組MAE / 推奨T-SL / 2R・SL先着 / R期待値） ・ 校正 ${esc(when)}`;
-    btn.textContent="再計算";
+    const waitReady=Number(cal.pathSchema||0)>=2&&Number(cal.pathDays||0)>=40;
+    bar.className=waitReady?"calibration-status ok":"calibration-status warn";
+    bar.innerHTML=`Strategy Calibration 3.2 有効 ・ ${cal.symbols?.length||0}銘柄 / ${cal.samples||cal.samplesCompact.length}サンプル<br>
+      SL最適化：有効（勝ち組MAE / 推奨T-SL / 2R・SL先着 / R期待値） ・
+      T-SL待ち検証：${waitReady?"有効":"再校正で有効"} ・ 校正 ${esc(when)}`;
+    btn.textContent=waitReady?"再計算":"再計算＋校正";
   }
 
   // ---------- v0.23 Monitoring Rank ----------
@@ -4879,7 +5171,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v023.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v024.js",{
           updateViaCache:"none"
         });
         await reg.update();
