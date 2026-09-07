@@ -472,6 +472,27 @@
     .strategy-stat strong{color:var(--text)}
     .strategy-stat.good strong{color:var(--green)}
     .strategy-stat.bad strong{color:var(--red)}
+    .sl-opt-box{
+      margin-top:8px;padding:8px 9px;border-radius:10px;
+      border:1px solid rgba(74,216,255,.14);
+      background:rgba(74,216,255,.035);
+      font-size:8px;color:var(--muted);line-height:1.5;
+    }
+    .sl-opt-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .sl-opt-title{font-weight:900;color:var(--text)}
+    .sl-fit{
+      display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+      font-weight:900;border:1px solid var(--line);white-space:nowrap;
+    }
+    .sl-fit.good{color:var(--green);border-color:rgba(104,227,193,.28)}
+    .sl-fit.mid{color:#ffd86b;border-color:rgba(255,216,107,.28)}
+    .sl-fit.bad{color:var(--red);border-color:rgba(255,95,103,.28)}
+    .sl-opt-grid{
+      display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:4px 10px;margin-top:6px;
+    }
+    .sl-opt-grid strong{color:var(--text)}
+    .sl-opt-note{margin-top:5px;font-size:7px;color:var(--muted)}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -694,11 +715,11 @@
     },
     set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
     get calibration() {
-      try { return JSON.parse(localStorage.getItem("ta_calibration_v021")) || null; } catch { return null; }
+      try { return JSON.parse(localStorage.getItem("ta_calibration_v022")) || null; } catch { return null; }
     },
     set calibration(v) {
-      if(v==null) localStorage.removeItem("ta_calibration_v021");
-      else localStorage.setItem("ta_calibration_v021", JSON.stringify(v));
+      if(v==null) localStorage.removeItem("ta_calibration_v022");
+      else localStorage.setItem("ta_calibration_v022", JSON.stringify(v));
     }
   };
 
@@ -2161,12 +2182,23 @@
     };
   }
 
+  function percentile(values,q){
+    if(!values.length) return 0;
+    const a=[...values].sort((x,y)=>x-y);
+    const pos=(a.length-1)*q;
+    const lo=Math.floor(pos),hi=Math.ceil(pos);
+    if(lo===hi) return a[lo];
+    const w=pos-lo;
+    return a[lo]*(1-w)+a[hi]*w;
+  }
+
   function summarizeCompact(rows){
     if(!rows.length) return {
       n:0,winRate:0,avgReturn:0,medianReturn:0,
       tpRate:0,slRate:0,firstTPRate:0,firstSLRate:0,bothRate:0,
       hit2RRate:0,touchSLRate:0,avgMfe:0,avgMae:0,
-      avgWin:0,avgLoss:0,payoffRatio:0
+      avgWin:0,avgLoss:0,payoffRatio:0,
+      winnerN:0,winnerMae50:0,winnerMae75:0,winnerMae90:0
     };
 
     const rets=rows.map(x=>x.fr);
@@ -2183,21 +2215,25 @@
     const hit2=rows.filter(x=>x.h2===1).length;
     const touchSL=rows.filter(x=>x.hs===1).length;
 
-    const wins=rets.filter(x=>x>0);
-    const losses=rets.filter(x=>x<0);
-    const avgWin=wins.length?wins.reduce((a,b)=>a+b,0)/wins.length:0;
-    const avgLoss=losses.length?losses.reduce((a,b)=>a+b,0)/losses.length:0;
+    const wins=rows.filter(x=>x.fr>0);
+    const losses=rows.filter(x=>x.fr<0);
+    const winRets=wins.map(x=>x.fr);
+    const lossRets=losses.map(x=>x.fr);
+    const avgWin=winRets.length?winRets.reduce((a,b)=>a+b,0)/winRets.length:0;
+    const avgLoss=lossRets.length?lossRets.reduce((a,b)=>a+b,0)/lossRets.length:0;
     const payoff=avgLoss<0?avgWin/Math.abs(avgLoss):0;
+
+    // Required stop width to survive the maximum adverse excursion
+    // of trades that still finished positive at day 20.
+    const winnerMaeWidths=wins.map(x=>Math.max(0,-Number(x.ma||0)));
 
     return {
       n:rows.length,
-      winRate:round1(rows.filter(x=>x.fr>0).length/rows.length*100),
+      winRate:round1(wins.length/rows.length*100),
       avgReturn:round1(rets.reduce((a,b)=>a+b,0)/rows.length),
       medianReturn:round1(med),
-      // Legacy conditional first-hit rates retained for the empirical score.
       tpRate:round1(resolved.length?tp/resolved.length*100:0),
       slRate:round1(resolved.length?sl/resolved.length*100:0),
-      // User-facing rates use all samples as denominator.
       firstTPRate:round1(firstTP/rows.length*100),
       firstSLRate:round1(firstSL/rows.length*100),
       bothRate:round1(both/rows.length*100),
@@ -2207,7 +2243,11 @@
       avgMae:round1(rows.reduce((a,x)=>a+x.ma,0)/rows.length),
       avgWin:round1(avgWin),
       avgLoss:round1(avgLoss),
-      payoffRatio:round1(payoff)
+      payoffRatio:round1(payoff),
+      winnerN:wins.length,
+      winnerMae50:round1(percentile(winnerMaeWidths,.50)),
+      winnerMae75:round1(percentile(winnerMaeWidths,.75)),
+      winnerMae90:round1(percentile(winnerMaeWidths,.90))
     };
   }
 
@@ -2245,6 +2285,11 @@
           if(hitSL){ firstHit="L"; break; }
         }
 
+        const path=futureSlice.map(c=>[
+          round1((c.high-entry)/entry*100),
+          round1((c.low-entry)/entry*100)
+        ]);
+
         const f=featureFromResult(r);
         rows.push({
           s:symbol,
@@ -2256,7 +2301,8 @@
           ma:round1((minLow-entry)/entry*100),
           h2:maxHigh>=target2R?1:0,
           hs:minLow<=stop?1:0,
-          fh:firstHit
+          fh:firstHit,
+          p:path
         });
       }catch{}
     }
@@ -2361,7 +2407,7 @@
 
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.21"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.22"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2467,6 +2513,7 @@
       entryLabel:entryLabel(f.et),
       stats,
       empiricalScore,
+      slAnalysis,
       avgSimilarity,
       symbols:symbols.length,
       quality,
@@ -2492,9 +2539,120 @@
   }
 
 
+
+  function simulateFixedR(row,stopPct){
+    if(!row||!Array.isArray(row.p)||!row.p.length||!(stopPct>0)) return null;
+    const tpPct=2*stopPct;
+
+    for(const day of row.p){
+      const hi=Number(day[0]||0);
+      const lo=Number(day[1]||0);
+      const hitTP=hi>=tpPct;
+      const hitSL=lo<=-stopPct;
+
+      // OHLC daily bars do not reveal intraday order.
+      // For EV we deliberately use the conservative assumption: SL first.
+      if(hitTP&&hitSL) return {r:-1,outcome:"B"};
+      if(hitTP) return {r:2,outcome:"T"};
+      if(hitSL) return {r:-1,outcome:"L"};
+    }
+
+    // Neither boundary touched: close the position at day-20 close.
+    const mark=clamp(Number(row.fr||0)/stopPct,-1,2);
+    return {r:mark,outcome:"N"};
+  }
+
+  function simulateRowsAtStop(rows,stopPct){
+    const sims=rows.map(x=>simulateFixedR(x,stopPct)).filter(Boolean);
+    if(!sims.length) return null;
+
+    const n=sims.length;
+    const tp=sims.filter(x=>x.outcome==="T").length;
+    const sl=sims.filter(x=>x.outcome==="L").length;
+    const both=sims.filter(x=>x.outcome==="B").length;
+    const nohit=sims.filter(x=>x.outcome==="N").length;
+    const ev=sims.reduce((a,x)=>a+x.r,0)/n;
+
+    return {
+      n,
+      expectedR:round2(ev),
+      tpFirstRate:round1(tp/n*100),
+      slFirstRate:round1((sl+both)/n*100),
+      ambiguousRate:round1(both/n*100),
+      noHitRate:round1(nohit/n*100),
+      positiveRRate:round1(sims.filter(x=>x.r>0).length/n*100)
+    };
+  }
+
+  function analyzeTacticalStop(rows,currentSL,structuralSL){
+    if(!rows.length||!(currentSL>0)) return null;
+
+    const winners=rows.filter(x=>x.fr>0);
+    const widths=winners.map(x=>Math.max(0,-Number(x.ma||0)));
+
+    if(winners.length<5) return null;
+
+    const q50=round1(percentile(widths,.50));
+    const q75=round1(percentile(widths,.75));
+    const q90=round1(percentile(widths,.90));
+    const survival=round1(
+      widths.filter(x=>x<currentSL).length/Math.max(widths.length,1)*100
+    );
+
+    let fit="適正",fitClass="good";
+    if(currentSL<Math.max(1,q50*.95)){
+      fit="狭すぎ";fitClass="bad";
+    }else if(currentSL<q75*.95){
+      fit="やや狭い";fitClass="mid";
+    }else if(currentSL>Math.max(q90*1.25,q90+3)){
+      fit="広め";fitClass="mid";
+    }
+
+    const currentSim=simulateRowsAtStop(rows,currentSL);
+
+    let best=null;
+    const maxStop=Math.max(
+      3,
+      Math.min(
+        25,
+        structuralSL>0?structuralSL:Math.max(20,currentSL*1.8)
+      )
+    );
+
+    for(let sl=3;sl<=maxStop+1e-9;sl+=0.5){
+      const sim=simulateRowsAtStop(rows,sl);
+      if(!sim||sim.n<10) continue;
+
+      // Tiny complexity penalty discourages choosing a very wide stop
+      // merely because mark-to-market R becomes compressed.
+      const adjusted=sim.expectedR-Math.max(0,sl-15)*0.005;
+      if(!best||adjusted>best.adjusted){
+        best={stopPct:round1(sl),expectedR:sim.expectedR,adjusted};
+      }
+    }
+
+    const structuralCap=structuralSL>0&&q75>structuralSL;
+
+    return {
+      currentSL:round1(currentSL),
+      structuralSL:round1(structuralSL||0),
+      winnerN:winners.length,
+      winnerMae50:q50,
+      winnerMae75:q75,
+      winnerMae90:q90,
+      winnerSurvivalRate:survival,
+      recommendedLow:q75,
+      recommendedHigh:q90,
+      fit,fitClass,structuralCap,
+      currentSim,
+      bestStopPct:best?.stopPct??null,
+      bestExpectedR:best?.expectedR??null
+    };
+  }
+
   function strategyHistoricalSet(r,symbol,strategy){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.21"||!Array.isArray(cal.samplesCompact)) return null;
+    if(!cal||cal.version!=="v0.22"||!Array.isArray(cal.samplesCompact)) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2540,7 +2698,7 @@
       return {
         strategy,referenceOut:true,
         reason:f.m==="S"?"他銘柄の短期モード比較データがありません":"戦略別比較候補がありません",
-        stats:null,empiricalScore:null,selectedCount:0,candidateCount:0,
+        stats:null,empiricalScore:null,slAnalysis:null,selectedCount:0,candidateCount:0,
         totalModeCandidates,strategyPoolCount,symbols:0,avgSimilarity:0,
         archetype:strategy==="reversal"?(f.ra||"NONE"):null,
         archetypeLabel:strategy==="reversal"?archetypeLabel(f.ra||"NONE"):null,
@@ -2605,6 +2763,14 @@
       ? round1(50+(rawScore-50)*quality.weight)
       : null;
 
+    const slAnalysis=publishable
+      ? analyzeTacticalStop(
+          rows,
+          Number(f.sl||r.tradePlan?.stopDistancePct||0),
+          Number(r.tradePlan?.structuralStopDistancePct||0)
+        )
+      : null;
+
     return {
       strategy,
       strategyLabel:strategy==="trend"?"順張り":"反転",
@@ -2649,7 +2815,7 @@
     btn.disabled=true;
     btn.textContent="計算中";
     $("calibrationResults").innerHTML="";
-    $("calProgress").textContent="Strategy Calibration 3.1 を開始します…";
+    $("calProgress").textContent="Strategy Calibration 3.2 を開始します…";
 
     const allRows=[];
     const usable=watchlist.filter(x=>Array.isArray(cache[x.symbol]?.candles)&&cache[x.symbol].candles.length>=55);
@@ -2697,7 +2863,7 @@
     });
 
     const calibration={
-      version:"v0.21",
+      version:"v0.22",
       horizon:20,
       step:5,
       generatedAt:new Date().toISOString(),
@@ -2794,14 +2960,14 @@
     const box=$("calibrationResults");
     if(!box) return;
 
-    if(!calibration||calibration.version!=="v0.21"){
-      box.innerHTML=`<div class="bt-note">Strategy Calibration 3.1は未実行です。「類似校正」を押してください。</div>`;
+    if(!calibration||calibration.version!=="v0.22"){
+      box.innerHTML=`<div class="bt-note">Strategy Calibration 3.2は未実行です。「類似校正」を押してください。</div>`;
       return;
     }
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.1では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -2818,7 +2984,8 @@
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
         長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。<br>
         類似実績Scoreの表示条件：類似15件以上・3銘柄以上・平均類似度55%以上。
-        2R先着率/SL先着率は全サンプルを分母にし、同日中に両方へ到達した曖昧ケースはどちらにも加算しません。
+        v0.22では各サンプルの20日間の日次High/Low経路も保持し、現在のTactical SLを過去の類似局面へ再適用します。
+        勝ちトレード限定MAEの50/75/90%点、現SL生存率、2R/SL先着、R期待値を計算します。
         条件未達は「参考外」とし、数値Scoreを表示しません。<br>
         信頼度：A=かなり信頼 / B=参考価値高 / C=参考程度 / —=参考外。
       </div>`;
@@ -3049,6 +3216,33 @@
 
     const g=empiricalTrustGrade(emp);
     const s=emp.stats;
+    const z=emp.slAnalysis;
+
+    const slBox=z?`<div class="sl-opt-box">
+      <div class="sl-opt-top">
+        <div class="sl-opt-title">T-SL最適化</div>
+        <span class="sl-fit ${z.fitClass}">${z.fit}</span>
+      </div>
+      <div class="sl-opt-grid">
+        <div>現T-SL <strong>${z.currentSL.toFixed(1)}%</strong></div>
+        <div>勝ち組生存 <strong>${z.winnerSurvivalRate.toFixed(0)}%</strong></div>
+        <div>勝ち組MAE 50% <strong>-${z.winnerMae50.toFixed(1)}%</strong></div>
+        <div>75% <strong>-${z.winnerMae75.toFixed(1)}%</strong></div>
+        <div>90% <strong>-${z.winnerMae90.toFixed(1)}%</strong></div>
+        <div>推奨帯 <strong>${z.recommendedLow.toFixed(1)}–${z.recommendedHigh.toFixed(1)}%</strong></div>
+        <div>現SL EV <strong>${z.currentSim?(z.currentSim.expectedR>=0?"+":"")+z.currentSim.expectedR.toFixed(2)+"R":"—"}</strong></div>
+        <div>EV最大SL <strong>${z.bestStopPct!=null?z.bestStopPct.toFixed(1)+"%":"—"}</strong></div>
+        <div>2R先着 <strong>${z.currentSim?z.currentSim.tpFirstRate.toFixed(0)+"%":"—"}</strong></div>
+        <div>SL先着 <strong>${z.currentSim?z.currentSim.slFirstRate.toFixed(0)+"%":"—"}</strong></div>
+      </div>
+      <div class="sl-opt-note">
+        ${z.structuralCap
+          ? `注意：勝ち組75%生存SL（${z.winnerMae75.toFixed(1)}%）がStructural SL（${z.structuralSL.toFixed(1)}%）を超えます。`
+          : `推奨帯＝20D勝ちトレードの75〜90%が最大逆行で刈られない幅。`}
+        EV最大SLは同一サンプル内の探索値で、将来成績を保証しません。
+      </div>
+    </div>`:"";
+
     return `<div class="strategy-emp good">
       戦略実績 <strong>${emp.empiricalScore.toFixed(0)}</strong> ${g.grade} /
       20D勝率 <strong>${s.winRate.toFixed(0)}%</strong> /
@@ -3063,6 +3257,7 @@
         <div class="strategy-stat">SL先着 <strong>${s.firstSLRate.toFixed(0)}%</strong></div>
         <div class="strategy-stat">2R到達 <strong>${s.hit2RRate.toFixed(0)}%</strong></div>
       </div>
+      ${slBox}
     </div>`;
   }
 
@@ -3530,7 +3725,7 @@
           ${pr.label}
         </div>`;
 
-        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Strategy Calibration 3.1</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
+        if(!emp) return prBlock+`<div class="empirical"><div class="title">Similarity Strategy Calibration 3.2</div><div class="foot">スクリーナーの「類似校正」を実行すると、現在に似た過去局面の実績が表示されます。</div></div>`;
 
         if(emp.referenceOut){
           return prBlock+`<div class="empirical">
