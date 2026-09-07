@@ -44,6 +44,17 @@
       display: flex; align-items: center; gap: 10px;
     }
     .title { font-weight: 800; font-size: 22px; flex: 1; letter-spacing: -.3px; }
+    .perf-settings{
+      margin:14px 0 4px;padding:12px;border-radius:14px;
+      border:1px solid var(--line);background:rgba(255,255,255,.02);
+    }
+    .perf-title{font-size:13px;font-weight:800;margin-bottom:5px;}
+    .perf-note{font-size:10px;line-height:1.55;color:var(--muted);}
+    .perf-storage{
+      margin-top:8px;padding:7px 9px;border-radius:10px;
+      background:var(--panel);border:1px solid var(--line);
+      color:var(--muted);font-size:10px;line-height:1.45;
+    }
     .version-badge{
       display:inline-block;vertical-align:middle;margin-left:5px;
       padding:2px 6px;border-radius:999px;
@@ -530,7 +541,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.22.4</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.22.5</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -711,6 +722,25 @@
       日足OHLCVをTwelve Dataから取得します。個人利用向けのMVPです。
       APIキーはこのブラウザのlocalStorageに保存され、ソースコードには埋め込みません。
     </p>
+
+    <div class="perf-settings">
+      <div class="perf-title">軽量化・キャッシュ整理</div>
+      <div class="perf-note">
+        APIキーとウォッチリストは消しません。通常は「古い更新キャッシュを整理」だけでOKです。
+      </div>
+      <div id="storageSummary" class="perf-storage"></div>
+      <button class="secondary" id="cleanupLegacyBtn" style="width:100%;margin-top:8px;">
+        古い更新キャッシュを整理
+      </button>
+      <button class="secondary danger" id="rebuildAnalysisBtn" style="width:100%;margin-top:8px;">
+        分析キャッシュを再構築
+      </button>
+      <div class="perf-note" style="margin-top:7px;">
+        「分析キャッシュを再構築」は日足データを残したまま、TA計算結果とCalibrationだけを消します。
+        APIの再取得は不要ですが、その後「再計算＋校正」を1回実行してください。
+      </div>
+    </div>
+
     <div class="buttons">
       <button class="secondary" id="closeSettingsBtn">閉じる</button>
       <button class="primary" id="saveSettingsBtn">保存</button>
@@ -724,8 +754,9 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.22.4";
+  const APP_BUILD = "0.22.5";
   const $ = (id) => document.getElementById(id);
+  let calibrationMemory = undefined;
   const store = {
     get apiKey() { return localStorage.getItem("ta_api_key") || ""; },
     set apiKey(v) { localStorage.setItem("ta_api_key", v); },
@@ -744,9 +775,16 @@
     },
     set cache(v) { localStorage.setItem("ta_cache", JSON.stringify(v)); },
     get calibration() {
-      try { return JSON.parse(localStorage.getItem("ta_calibration_v022")) || null; } catch { return null; }
+      if(calibrationMemory!==undefined) return calibrationMemory;
+      try{
+        calibrationMemory=JSON.parse(localStorage.getItem("ta_calibration_v022")) || null;
+      }catch{
+        calibrationMemory=null;
+      }
+      return calibrationMemory;
     },
     set calibration(v) {
+      calibrationMemory=v==null?null:v;
       if(v==null) localStorage.removeItem("ta_calibration_v022");
       else localStorage.setItem("ta_calibration_v022", JSON.stringify(v));
     }
@@ -765,6 +803,8 @@
   let chartCrosshair = {active:false,index:null,date:null};
   let chartLongPressTimer = null;
   let screenerCalibrationError = null;
+  const screenerMetricMemo = new Map();
+  let calibrationRenderKey = null;
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -1770,6 +1810,7 @@
       const result=evaluateTA(symbol,candles);
       cache[symbol]={candles,result,updatedAt:Date.now()};
       store.cache=cache;
+      screenerMetricMemo.delete(symbol);
       if(!silent) toast(`${symbol}を更新しました`);
       if(currentSymbol===symbol) renderDetail(symbol);
     }catch(e){
@@ -2281,8 +2322,9 @@
     };
   }
 
-  function calibrationSnapshotsForSymbol(symbol,candles,horizon=20,step=5){
+  async function calibrationSnapshotsForSymbol(symbol,candles,horizon=20,step=5){
     const rows=[];
+    let processed=0;
     // Important: a long-listed stock must NOT be treated as "short mode"
     // just because we truncated its historical slice.
     const genuineMode=candles.length<220?"S":"F";
@@ -2335,6 +2377,10 @@
           p:path
         });
       }catch{}
+      processed++;
+      if(processed%8===0){
+        await new Promise(resolve=>setTimeout(resolve,0));
+      }
     }
     return rows;
   }
@@ -2872,7 +2918,7 @@
     for(let i=0;i<usable.length;i++){
       const item=usable[i];
       $("calProgress").textContent=`${i+1}/${usable.length} ${item.symbol} を検証中…`;
-      allRows.push(...calibrationSnapshotsForSymbol(item.symbol,cache[item.symbol].candles,20,5));
+      allRows.push(...await calibrationSnapshotsForSymbol(item.symbol,cache[item.symbol].candles,20,5));
       await new Promise(resolve=>setTimeout(resolve,0));
     }
 
@@ -2922,6 +2968,8 @@
     };
 
     store.calibration=calibration;
+    screenerMetricMemo.clear();
+    calibrationRenderKey=null;
 
     const persisted=store.calibration;
     if(!persisted || persisted.version!=="v0.22" || !Array.isArray(persisted.samplesCompact) || persisted.samplesCompact.length!==allRows.length){
@@ -3010,6 +3058,16 @@
     const box=$("calibrationResults");
     if(!box) return;
 
+    const nextRenderKey=calibration&&calibration.version==="v0.22"
+      ? `${APP_BUILD}|${calibration.generatedAt||""}|${calibration.samples||0}`
+      : `${APP_BUILD}|none`;
+
+    if(calibrationRenderKey===nextRenderKey && box.dataset.renderKey===nextRenderKey && box.innerHTML){
+      return;
+    }
+    calibrationRenderKey=nextRenderKey;
+    box.dataset.renderKey=nextRenderKey;
+
     if(!calibration||calibration.version!=="v0.22"){
       box.innerHTML=`<div class="bt-note">Strategy Calibration 3.2は未実行です。「類似校正」を押してください。</div>`;
       return;
@@ -3017,7 +3075,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.22.4）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.22.5）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3356,7 +3414,7 @@
 
   // ---------- Rendering ----------
 
-  function screenMetrics(item){
+  function screenMetricsCore(item){
     const c=cache[item.symbol];
     if(!c?.candles || !Array.isArray(c.candles)) return null;
 
@@ -3459,6 +3517,29 @@
         return null;
       }
     }
+  }
+
+
+  function screenMetrics(item){
+    const c=cache[item.symbol];
+    if(!c?.candles || !Array.isArray(c.candles) || !c.candles.length) return null;
+
+    const last=c.candles[c.candles.length-1]||{};
+    const cal=store.calibration;
+    const key=[
+      APP_BUILD,
+      last.date||"",
+      Number(last.close||0),
+      Number(last.volume||0),
+      cal?.generatedAt||"none"
+    ].join("|");
+
+    const hit=screenerMetricMemo.get(item.symbol);
+    if(hit?.key===key) return hit.value;
+
+    const value=screenMetricsCore(item);
+    screenerMetricMemo.set(item.symbol,{key,value});
+    return value;
   }
 
   function passesPreset(x){
@@ -3692,7 +3773,7 @@
       if(c?.candles&&(!r||r.action===undefined)){
         try{
           r=evaluateTA(item.symbol,c.candles);
-          c.result=r;cache[item.symbol]=c;store.cache=cache;
+          c.result=r;cache[item.symbol]=c;
         }catch{}
       }
       const loading=refreshing.has(item.symbol);
@@ -3772,7 +3853,6 @@
     const r=evaluateTA(symbol,candles);
     data.result=r;
     cache[symbol]=data;
-    store.cache=cache;
 
     $("detailPrice").textContent=money(r.latest.close);
     $("detailDate").textContent=`${r.latest.date} 日足終値`;
@@ -4210,8 +4290,68 @@
   }
 
   // ---------- Settings / events ----------
+
+  function approxStorageKB(){
+    let chars=0;
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      if(!k) continue;
+      chars+=k.length+(localStorage.getItem(k)||"").length;
+    }
+    return Math.round(chars*2/1024);
+  }
+
+  function updateStorageSummary(){
+    const el=$("storageSummary");
+    if(!el) return;
+    const cal=store.calibration;
+    const candleCount=Object.values(cache).reduce(
+      (n,x)=>n+(Array.isArray(x?.candles)?x.candles.length:0),0
+    );
+    el.textContent=`端末保存 約${approxStorageKB()}KB / 日足 ${candleCount}本 / Calibration ${cal?.samples||0}サンプル`;
+  }
+
+  async function cleanupLegacyCaches(){
+    let deleted=0;
+    if("caches" in window){
+      const keys=await caches.keys();
+      for(const key of keys){
+        if(key.startsWith("ta-investor-") && key!=="ta-investor-v0225"){
+          if(await caches.delete(key)) deleted++;
+        }
+      }
+    }
+
+    const keep=new Set(["ta_api_key","ta_watchlist","ta_cache","ta_calibration_v022"]);
+    const stale=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      if(k&&k.startsWith("ta_")&&!keep.has(k)) stale.push(k);
+    }
+    stale.forEach(k=>localStorage.removeItem(k));
+
+    updateStorageSummary();
+    return {deleted,stale:stale.length};
+  }
+
+  function rebuildAnalysisCache(){
+    for(const sym of Object.keys(cache)){
+      if(cache[sym] && typeof cache[sym]==="object"){
+        delete cache[sym].result;
+      }
+    }
+    store.cache=cache;
+    store.calibration=null;
+    screenerMetricMemo.clear();
+    calibrationRenderKey=null;
+    screenerCalibrationError=null;
+    updateCalibrationStatusUI();
+    updateStorageSummary();
+  }
+
   function openSettings(){
     $("apiKeyInput").value=store.apiKey;
+    updateStorageSummary();
     $("settingsModal").classList.remove("hidden");
   }
   function closeSettings(){ $("settingsModal").classList.add("hidden"); }
@@ -4303,6 +4443,31 @@
 
   $("settingsBtn").addEventListener("click",openSettings);
   $("closeSettingsBtn").addEventListener("click",closeSettings);
+
+  $("cleanupLegacyBtn").addEventListener("click",async()=>{
+    const btn=$("cleanupLegacyBtn");
+    btn.disabled=true;
+    btn.textContent="整理中…";
+    try{
+      const r=await cleanupLegacyCaches();
+      toast(`古い更新キャッシュを整理しました（Cache ${r.deleted} / 保存キー ${r.stale}）`);
+    }catch(e){
+      toast(`整理エラー: ${e.message||String(e)}`);
+    }finally{
+      btn.disabled=false;
+      btn.textContent="古い更新キャッシュを整理";
+    }
+  });
+
+  $("rebuildAnalysisBtn").addEventListener("click",()=>{
+    const ok=confirm("日足・APIキー・ウォッチリストは残し、TA計算結果とCalibrationだけを削除します。続けますか？");
+    if(!ok) return;
+    rebuildAnalysisCache();
+    closeSettings();
+    if(listMode==="screen") renderScreener();
+    else renderWatchlist();
+    toast("分析キャッシュを整理しました。必要なら「再計算＋校正」を実行してください");
+  });
   $("saveSettingsBtn").addEventListener("click",()=>{
     store.apiKey=$("apiKeyInput").value.trim();
     closeSettings();renderWatchlist();toast("APIキーを保存しました");
@@ -4433,7 +4598,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0224.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0225.js",{
           updateViaCache:"none"
         });
         await reg.update();
