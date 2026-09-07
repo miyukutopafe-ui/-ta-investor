@@ -576,7 +576,7 @@
         <div class="scan-summary">
           <div class="summary-box"><div class="k">判定済み</div><div class="v" id="scanCount">0</div></div>
           <div class="summary-box"><div class="k">該当</div><div class="v" id="scanMatch">0</div></div>
-          <div class="summary-box"><div class="k">未取得</div><div class="v" id="scanMissing">0</div></div>
+          <div class="summary-box"><div class="k">未判定</div><div class="v" id="scanMissing">0</div></div>
         </div>
 
         <div id="screenResults" class="screen-list"></div>
@@ -3178,9 +3178,14 @@
   }
 
   function entryPriority(r,empBundle){
-    const generic=empBundle?.generic ?? empBundle ?? null;
-    const trendEmp=empBundle?.trend ?? generic;
-    const reversalEmp=empBundle?.reversal ?? generic;
+    const isBundle=!!(
+      empBundle &&
+      typeof empBundle==="object" &&
+      ("generic" in empBundle || "trend" in empBundle || "reversal" in empBundle)
+    );
+    const generic=isBundle ? (empBundle.generic||null) : (empBundle||null);
+    const trendEmp=isBundle ? (empBundle.trend||generic) : generic;
+    const reversalEmp=isBundle ? (empBundle.reversal||generic) : generic;
     const trend=trendPriority(r,trendEmp);
     const reversal=reversalPriority(r,reversalEmp);
     const best=reversal.score>trend.score?reversal:trend;
@@ -3267,25 +3272,66 @@
     const c=cache[item.symbol];
     if(!c?.candles || !Array.isArray(c.candles)) return null;
 
+    let r=null;
+    let evalError=null;
+
     try{
-      const r=evaluateTA(item.symbol,c.candles);
+      r=evaluateTA(item.symbol,c.candles);
       c.result=r;
       cache[item.symbol]=c;
+    }catch(err){
+      evalError=err;
+      if(c?.result && c.result.tradePlan && c.result.timingBreakdown){
+        r=c.result;
+      }
+    }
 
-      const latest=r.latest.close;
-      const pbDist=(latest-r.tradePlan.pullbackEntry)/Math.max(latest,0.01)*100;
-      const erDist=(r.tradePlan.earlyReversalLevel-latest)/Math.max(latest,0.01)*100;
-      const boDist=(r.tradePlan.breakoutLevel-latest)/Math.max(latest,0.01)*100;
+    if(!r){
+      console.warn("Screener evaluate failed:",item.symbol,evalError);
+      return null;
+    }
 
-      const bullishDivs=r.divergences.filter(d=>d.direction==="bullish");
-      const bearishDivs=r.divergences.filter(d=>d.direction==="bearish");
-      const bullDiv=bullishDivs.length?Math.max(...bullishDivs.map(d=>d.strength)):0;
-      const bearDiv=bearishDivs.length?Math.max(...bearishDivs.map(d=>d.strength)):0;
-      const confirmedBull=bullishDivs.some(d=>d.confirmed&&d.strength>=65);
+    try{
+      const latest=Number(r.latest?.close ?? c.candles[c.candles.length-1]?.close);
+      if(!Number.isFinite(latest)) return null;
 
-      const empiricalBundle=strategyEmpiricals(r,item.symbol);
-      const empirical=empiricalBundle.generic;
-      const priority=entryPriority(r,empiricalBundle);
+      const pullback=Number(r.tradePlan?.pullbackEntry ?? latest);
+      const early=Number(r.tradePlan?.earlyReversalLevel ?? latest);
+      const breakout=Number(r.tradePlan?.breakoutLevel ?? latest);
+
+      const pbDist=(latest-pullback)/Math.max(latest,0.01)*100;
+      const erDist=(early-latest)/Math.max(latest,0.01)*100;
+      const boDist=(breakout-latest)/Math.max(latest,0.01)*100;
+
+      const divergences=Array.isArray(r.divergences)?r.divergences:[];
+      const bullishDivs=divergences.filter(d=>d.direction==="bullish");
+      const bearishDivs=divergences.filter(d=>d.direction==="bearish");
+      const bullDiv=bullishDivs.length?Math.max(...bullishDivs.map(d=>Number(d.strength)||0)):0;
+      const bearDiv=bearishDivs.length?Math.max(...bearishDivs.map(d=>Number(d.strength)||0)):0;
+      const confirmedBull=bullishDivs.some(d=>d.confirmed&&(Number(d.strength)||0)>=65);
+
+      let empiricalBundle={generic:null,trend:null,reversal:null};
+      let empirical=null;
+
+      try{
+        if(store.calibration?.version==="v0.22"){
+          empiricalBundle=strategyEmpiricals(r,item.symbol) || empiricalBundle;
+          empirical=empiricalBundle.generic||null;
+        }
+      }catch(err){
+        console.warn("Screener calibration failed:",item.symbol,err);
+        empiricalBundle={generic:null,trend:null,reversal:null};
+        empirical=null;
+      }
+
+      let priority;
+      try{
+        priority=entryPriority(r,empiricalBundle);
+      }catch(err){
+        console.warn("Screener priority failed:",item.symbol,err);
+        priority=entryPriority(r,null);
+      }
+
       return {
         item,r,
         pbDist:round1(pbDist),
@@ -3297,10 +3343,28 @@
         range52:calc52WeekRange(c.candles),
         empirical,
         empiricalBundle,
-        priority
+        priority,
+        fallbackResult:!!evalError,
+        evalError:evalError?String(evalError.message||evalError):null
       };
-    }catch{
-      return null;
+    }catch(err){
+      console.warn("Screener metrics failed:",item.symbol,err);
+      try{
+        const priority=entryPriority(r,null);
+        return {
+          item,r,
+          pbDist:0,erDist:0,boDist:0,
+          bullDiv:0,bearDiv:0,confirmedBull:false,
+          range52:calc52WeekRange(c.candles),
+          empirical:null,
+          empiricalBundle:{generic:null,trend:null,reversal:null},
+          priority,
+          fallbackResult:true,
+          evalError:String(err.message||err)
+        };
+      }catch{
+        return null;
+      }
     }
   }
 
@@ -3390,8 +3454,6 @@
       if(x) rows.push(x);
       else missing++;
     });
-    store.cache=cache;
-
     const matched=sortScreenRows(rows.filter(passesPreset));
 
     $("scanCount").textContent=rows.length;
@@ -3476,8 +3538,9 @@
           <div class="mini"><div class="k">T-SL幅</div><div class="v ${riskClass}">${r.tradePlan.stopDistancePct.toFixed(1)}%</div></div>
         </div>
 
+        ${x.fallbackResult?`<div class="screen-note" style="color:#ffd86b;">※ 保存済み判定を一時表示中です。右上「再計算」で更新できます。</div>`:""}
         <div class="screen-note">
-          RCI9 ${r.r9.toFixed(1)} / 出来高 ${r.volumeRatio.toFixed(2)}倍 /
+          RCI9 ${Number(r.r9||0).toFixed(1)} / 出来高 ${Number(r.volumeRatio||0).toFixed(2)}倍 /
           ERまで ${x.erDist>=0?"+":""}${x.erDist.toFixed(1)}% /
           S-SL ${r.tradePlan.structuralStopDistancePct.toFixed(1)}%
         </div>
@@ -4087,8 +4150,21 @@
   });
 
   $("scanRefreshBtn").addEventListener("click",()=>{
+    let rebuilt=0;
+    for(const item of watchlist){
+      const c=cache[item.symbol];
+      if(!c?.candles || !Array.isArray(c.candles)) continue;
+      try{
+        c.result=evaluateTA(item.symbol,c.candles);
+        cache[item.symbol]=c;
+        rebuilt++;
+      }catch(err){
+        console.warn("Cached recalculation failed:",item.symbol,err);
+      }
+    }
+    try{ store.cache=cache; }catch(err){ console.warn("Cache save failed:",err); }
     renderScreener();
-    toast("取得済みデータで再計算しました");
+    toast(`取得済みデータを再計算しました（${rebuilt}銘柄）`);
   });
 
   $("settingsBtn").addEventListener("click",openSettings);
