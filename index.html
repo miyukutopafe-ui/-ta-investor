@@ -734,7 +734,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.24.3</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24.4</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -951,7 +951,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.24.3";
+  const APP_BUILD = "0.24.4";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -2536,30 +2536,47 @@
         const r=evaluateTA(symbol,hist);
         if((r.historyMode==="short"?"S":"F")!==genuineMode) continue;
 
-        const entry=candles[i].close;
+        // v0.24.4 execution rule:
+        // The signal is known only after candle[i] closes.
+        // Therefore the earliest executable market entry is the NEXT trading day's open.
+        const signalClose=Number(candles[i].close);
         const pathSlice=candles.slice(i+1,i+effectivePathHorizon+1);
         if(pathSlice.length<effectivePathHorizon) continue;
+
+        const executionOpen=Number(pathSlice[0]?.open);
+        if(!(signalClose>0)||!(executionOpen>0)) continue;
+
         const futureSlice=pathSlice.slice(0,horizon);
         const future=futureSlice[futureSlice.length-1].close;
         const maxHigh=Math.max(...futureSlice.map(c=>c.high));
         const minLow=Math.min(...futureSlice.map(c=>c.low));
 
-        const stop=r.timingBreakdown?.entryStop ?? r.tradePlan.stopLoss;
-        const unitRisk=Math.max(entry-stop,0.01);
-        const target2R=entry+2*unitRisk;
-        let firstHit="N";
-        for(const c of futureSlice){
-          const hitSL=c.low<=stop;
-          const hitTP=c.high>=target2R;
-          if(hitSL&&hitTP){ firstHit="B"; break; }
-          if(hitTP){ firstHit="T"; break; }
-          if(hitSL){ firstHit="L"; break; }
+        // Keep the stop level that was actually knowable at the signal close,
+        // but measure trade performance from the executable next-session open.
+        const stop=Number(r.timingBreakdown?.entryStop ?? r.tradePlan.stopLoss);
+        const gapInvalid=Number.isFinite(stop)&&executionOpen<=stop;
+        const unitRisk=Math.max(executionOpen-stop,0.01);
+        const target2R=executionOpen+2*unitRisk;
+
+        let firstHit=gapInvalid?"L":"N";
+        if(!gapInvalid){
+          for(const c of futureSlice){
+            const hitSL=c.low<=stop;
+            const hitTP=c.high>=target2R;
+            if(hitSL&&hitTP){ firstHit="B"; break; }
+            if(hitTP){ firstHit="T"; break; }
+            if(hitSL){ firstHit="L"; break; }
+          }
         }
 
+        // Path remains anchored to the SIGNAL CLOSE so a limit such as -1%
+        // means "1% below the known signal-day close".  Open is added as the
+        // 4th element so executable next-open returns can be reconstructed.
         const path=pathSlice.map(c=>[
-          round1((c.high-entry)/entry*100),
-          round1((c.low-entry)/entry*100),
-          round1((c.close-entry)/entry*100)
+          round1((c.high-signalClose)/signalClose*100),
+          round1((c.low-signalClose)/signalClose*100),
+          round1((c.close-signalClose)/signalClose*100),
+          round1((c.open-signalClose)/signalClose*100)
         ]);
 
         const f=featureFromResult(r);
@@ -2568,12 +2585,14 @@
           m:f.m, ta:f.ta, t:f.t, r:f.r, db:f.db, et:f.et,
           su:f.su, tr:f.tr, ex:f.ex, cx:f.cx, rk:f.rk, sl:f.sl,
           vr:f.vr, sg:f.sg, sp:f.sp, ts:f.ts, rs:f.rs, ra:f.ra, rf:f.rf, cm:f.cm,
-          fr:round1((future-entry)/entry*100),
-          mf:round1((maxHigh-entry)/entry*100),
-          ma:round1((minLow-entry)/entry*100),
-          h2:maxHigh>=target2R?1:0,
-          hs:minLow<=stop?1:0,
+          // All headline 20D outcomes now use next-session OPEN as entry.
+          fr:round1((future-executionOpen)/executionOpen*100),
+          mf:round1((maxHigh-executionOpen)/executionOpen*100),
+          ma:round1((minLow-executionOpen)/executionOpen*100),
+          h2:gapInvalid?0:(maxHigh>=target2R?1:0),
+          hs:gapInvalid?1:(minLow<=stop?1:0),
           fh:firstHit,
+          eg:round1((executionOpen-signalClose)/signalClose*100),
           p:path
         });
       }catch{}
@@ -2683,7 +2702,13 @@
 
   function similarHistoricalSet(r,symbol=null){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.22"||!Array.isArray(cal.samplesCompact)) return null;
+    if(
+      !cal||
+      cal.version!=="v0.22"||
+      Number(cal.pathSchema||0)<3||
+      cal.executionBasis!=="NEXT_OPEN"||
+      !Array.isArray(cal.samplesCompact)
+    ) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -2828,13 +2853,30 @@
 
 
 
+  function executionOpenFactor(row){
+    if(!row||!Array.isArray(row.p)||!row.p.length) return null;
+    const openPct=Number(row.p[0]?.[3]);
+    if(!Number.isFinite(openPct)) return null;
+    const factor=1+openPct/100;
+    return factor>0?factor:null;
+  }
+
+  function signalPctToExecutionPct(signalPct,entryFactor){
+    const factor=1+Number(signalPct||0)/100;
+    return (factor/entryFactor-1)*100;
+  }
+
   function simulateFixedR(row,stopPct){
     if(!row||!Array.isArray(row.p)||!row.p.length||!(stopPct>0)) return null;
+
+    const entryFactor=executionOpenFactor(row);
+    if(!entryFactor) return null;
+
     const tpPct=2*stopPct;
 
     for(const day of row.p.slice(0,20)){
-      const hi=Number(day[0]||0);
-      const lo=Number(day[1]||0);
+      const hi=signalPctToExecutionPct(day[0],entryFactor);
+      const lo=signalPctToExecutionPct(day[1],entryFactor);
       const hitTP=hi>=tpPct;
       const hitSL=lo<=-stopPct;
 
@@ -2846,6 +2888,7 @@
     }
 
     // Neither boundary touched: close the position at day-20 close.
+    // row.fr is already measured from the executable next-session open.
     const mark=clamp(Number(row.fr||0)/stopPct,-1,2);
     return {r:mark,outcome:"N"};
   }
@@ -2943,7 +2986,12 @@
     if(!row||!Array.isArray(row.p)||!row.p.length||!(waitPct>0)) return null;
 
     const hasClosePath=row.p.length>=maxWaitDays+holdDays-1 &&
-      row.p.some(day=>Array.isArray(day)&&day.length>=3&&Number.isFinite(Number(day[2])));
+      row.p.some(day=>
+        Array.isArray(day)&&
+        day.length>=4&&
+        Number.isFinite(Number(day[2]))&&
+        Number.isFinite(Number(day[3]))
+      );
     if(!hasClosePath) return {status:"OLD"};
 
     let fillIndex=-1;
@@ -2984,16 +3032,24 @@
       minAfter=Math.min(minAfter,loRet);
     }
 
-    const originalExitReturn=Number(row.p[exitIndex][2]||0);
-    const exitFactor=1+originalExitReturn/100;
+    const signalExitReturn=Number(row.p[exitIndex][2]||0);
+    const exitFactor=1+signalExitReturn/100;
     const waitReturn=(exitFactor/entryFactor-1)*100;
+
+    // Fair same-exit comparison:
+    // "market entry" is next-session OPEN, because the signal was only known
+    // after the signal candle closed.
+    const immediateEntryFactor=executionOpenFactor(row);
+    if(!immediateEntryFactor) return {status:"OLD"};
+
+    const immediateSameExit=(exitFactor/immediateEntryFactor-1)*100;
 
     return {
       status:"F",
       fillIndex,
       fillDay:fillIndex+1,
       waitReturn:round1(waitReturn),
-      originalSameExit:round1(originalExitReturn),
+      originalSameExit:round1(immediateSameExit),
       mfe:round1(maxAfter),
       mae:round1(minAfter)
     };
@@ -3079,13 +3135,18 @@
     const schemaRows=rows.filter(row=>
       Array.isArray(row.p) &&
       row.p.length>=39 &&
-      row.p.some(day=>Array.isArray(day)&&day.length>=3&&Number.isFinite(Number(day[2])))
+      row.p.some(day=>
+        Array.isArray(day)&&
+        day.length>=4&&
+        Number.isFinite(Number(day[2]))&&
+        Number.isFinite(Number(day[3]))
+      )
     );
 
     if(schemaRows.length<Math.min(10,rows.length)){
       return {
         available:false,
-        reason:"v0.24の40日経路データがありません。『再計算＋校正』を1回実行してください。"
+        reason:"v0.24.4の翌営業日始値対応データがありません。『再計算＋校正』を1回実行してください。"
       };
     }
 
@@ -3097,7 +3158,7 @@
       schemaRows,currentSL,cancelPct,maxWaitDays,holdDays
     );
 
-    // Immediate-entry 20D baseline from the same selected historical set.
+    // Next-session OPEN 20D baseline from the same selected historical set.
     const immediateReturns=schemaRows
       .map(x=>Number(x.fr))
       .filter(Number.isFinite);
@@ -3289,7 +3350,7 @@
       recommendation={
         kind:best.isImmediate?"immediate":"wait",
         label:best.isImmediate
-          ? "即買い"
+          ? "次営業日寄り"
           : (entryZone
               ? (entryZone.from===0
                   ? `即買い〜-${entryZone.to.toFixed(1)}%`
@@ -3365,7 +3426,7 @@
         const gapVsPrimary=round1(recommendation.perSignalAvg-immediate.perSignalAvg);
         alternative={
           kind:"immediate",
-          label:"即買い",
+          label:"次営業日寄り",
           bestWait:0,
           fillRate:100,
           winRate:immediate.winRate,
@@ -3466,7 +3527,13 @@
 
   function strategyHistoricalSet(r,symbol,strategy){
     const cal=store.calibration;
-    if(!cal||cal.version!=="v0.22"||!Array.isArray(cal.samplesCompact)) return null;
+    if(
+      !cal||
+      cal.version!=="v0.22"||
+      Number(cal.pathSchema||0)<3||
+      cal.executionBasis!=="NEXT_OPEN"||
+      !Array.isArray(cal.samplesCompact)
+    ) return null;
 
     const f=featureFromResult(r);
     let candidates=cal.samplesCompact.filter(x=>x.m===f.m);
@@ -3685,8 +3752,9 @@
       version:"v0.22",
       horizon:20,
       step:5,
-      pathSchema:2,
+      pathSchema:3,
       pathDays:40,
+      executionBasis:"NEXT_OPEN",
       generatedAt:new Date().toISOString(),
       symbols:usable.map(x=>x.symbol),
       samples:allRows.length,
@@ -3801,14 +3869,22 @@
     calibrationRenderKey=nextRenderKey;
     box.dataset.renderKey=nextRenderKey;
 
-    if(!calibration||calibration.version!=="v0.22"){
-      box.innerHTML=`<div class="bt-note">Strategy Calibration 3.2は未実行です。「類似校正」を押してください。</div>`;
+    if(
+      !calibration||
+      calibration.version!=="v0.22"||
+      Number(calibration.pathSchema||0)<3||
+      calibration.executionBasis!=="NEXT_OPEN"
+    ){
+      box.innerHTML=`<div class="bt-note">
+        v0.24.4ではバックテストの約定基準を<strong>翌営業日始値</strong>へ変更しました。
+        旧校正データは混在させません。<strong>「類似校正」</strong>を1回実行してください。
+      </div>`;
       return;
     }
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.24.3）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.24.4）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3825,9 +3901,10 @@
         基準：20営業日後 / 5営業日おき / ${calibration.samples}サンプル / ${calibration.symbols.length}銘柄。
         長期上場銘柄のデータ先頭部分を「短期モード」と誤分類しないよう、フル履歴銘柄は220本以降だけを校正に使用します。<br>
         類似実績Scoreの表示条件：類似15件以上・3銘柄以上・平均類似度55%以上。
-        v0.24では各サンプルの40日間の日次High/Low/Close経路を保持します。
-        先頭20日は従来どおりTactical SLの再適用・勝ち組MAE・2R/SL先着・R期待値に使い、
-        追加20日は「元T-SLへ先着したら、その水準で待ち買いした場合」の20営業日後成績を検証します。
+        v0.24.4ではシグナルは日足終値確定後に判定し、実売買可能性を優先して<strong>翌営業日始値</strong>を市場成行の約定基準にします。
+        各サンプルは40日間の日次Open/High/Low/Close経路を保持します。
+        先頭20日はTactical SLの再適用・勝ち組MAE・2R/SL先着・R期待値に使い、
+        待ち指値はシグナル確定後の翌営業日から判定し、約定後20営業日成績を検証します。
         条件未達は「参考外」とし、数値Scoreを表示しません。<br>
         信頼度：A=かなり信頼 / B=参考価値高 / C=参考程度 / —=参考外。
       </div>`;
@@ -4101,7 +4178,7 @@
             </div>
             <div class="wait-entry-delta">
               同じSL先着サブセットを同じExit日で比較：
-              即買い勝率 <strong>${q.sameExitWinRate.toFixed(0)}%</strong>
+              翌日寄り勝率 <strong>${q.sameExitWinRate.toFixed(0)}%</strong>
               → 待ち買い <strong>${q.winRate.toFixed(0)}%</strong>
               （<strong class="${d>=0?"good":"bad"}">${d>=0?"+":""}${d.toFixed(0)}pt</strong>） /
               平均差 <strong class="${ad>=0?"good":"bad"}">${ad>=0?"+":""}${ad.toFixed(1)}pt</strong>
@@ -4110,7 +4187,7 @@
               <div>上へ走って未約定 <strong>${q.runawayRate.toFixed(0)}%</strong></div>
               <div>未約定の元20D勝ち <strong>${q.missedWinnerRate.toFixed(0)}%</strong></div>
               ${w.best?`
-                <div>Best <strong>${w.best.waitPct===0?"即買い":`-${w.best.waitPct.toFixed(1)}%`}</strong></div>
+                <div>Best <strong>${w.best.waitPct===0?"次営業日寄り":`-${w.best.waitPct.toFixed(1)}%`}</strong></div>
                 <div>Best全信号 <strong>${w.best.perSignalAvg>=0?"+":""}${w.best.perSignalAvg.toFixed(1)}%</strong></div>
               `:""}
             </div>
@@ -4124,7 +4201,7 @@
                   </div>
                   <div class="entry-decision-score">
                     <span class="entry-zone-chip ${w.recommendation.confidence==="低"?"warn":""}">
-                      推奨確度 ${w.recommendation.confidence}
+                      判定確度 ${w.recommendation.confidence}
                     </span>
                     <span class="entry-decision-num">${w.recommendation.confidenceScore}</span>
                   </div>
@@ -4143,7 +4220,7 @@
                   <div class="entry-alt-box">
                     <div class="entry-alt-head">
                       <div class="entry-alt-title">
-                        ${w.alternative.kind==="pullback"?"押し目代替":"即買い代替"}：
+                        ${w.alternative.kind==="pullback"?"押し目代替":"翌日寄り代替"}：
                         ${esc(w.alternative.label)}
                       </div>
                       <span class="entry-alt-badge ${
@@ -4165,9 +4242,9 @@
                 `:""}
 
                 <div class="entry-zone-foot">
-                  推奨確度は、サンプル数・Bestと2位の差・周辺水準での優位性・約定率を合成して判定します。
+                  エントリー判定確度は、サンプル数・Bestと2位の差・周辺水準での優位性・約定率を合成して判定します。
                   ${w.recommendation.kind==="immediate"
-                    ? " 即買いがBestでも、浅い押し目との差が小さい場合は確度を下げ、実用的な押し目代替を併記します。"
+                    ? " 次営業日寄りがBestでも、浅い押し目との差が小さい場合は確度を下げ、実用的な押し目代替を併記します。"
                     : " 押し目待ちがBestの場合は、単一点ではなく周辺の安定帯を優先します。"}
                   T-SLは引き続き「買い場」ではなく、保有後の撤退基準として別管理します。
                 </div>
@@ -4199,7 +4276,7 @@
                           x.isImmediate?"immediate":""
                         }">
                           <td>
-                            ${x.isImmediate?"即買い":`-${x.waitPct.toFixed(1)}%`}
+                            ${x.isImmediate?"翌日寄り":`-${x.waitPct.toFixed(1)}%`}
                             ${x.isCurrent?`<span class="wait-compare-tag">T-SL</span>`:""}
                             ${x.isBest?`<span class="wait-compare-tag">Best</span>`:""}
                             ${x.inZone&&!x.isBest?`<span class="wait-compare-tag">Zone</span>`:""}
@@ -4218,7 +4295,7 @@
                     </tbody>
                   </table>
                   <div class="wait-entry-note">
-                    「即買い」は同じ類似局面をシグナル日に買って20営業日保有した基準値です。
+                    「翌日寄り」はシグナル日終値が確定した次の営業日の始値で買い、20営業日保有した基準値です。
                     「平均」は待ち指値が約定したケースだけの20D平均、「全信号」は未約定を0%として含めた平均です。
                     ${w.comparisonLevels.some(x=>x.beyondCurrent)
                       ? ` 現T-SLより深い待ち水準は、本来の損切り域を超えるため参考値です。`
@@ -4287,6 +4364,8 @@
     return !!(
       cal &&
       cal.version==="v0.22" &&
+      Number(cal.pathSchema||0)>=3 &&
+      cal.executionBasis==="NEXT_OPEN" &&
       Array.isArray(cal.samplesCompact) &&
       cal.samplesCompact.length>0
     );
@@ -4308,17 +4387,17 @@
 
     if(!calibrationReady()){
       bar.className="calibration-status warn";
-      bar.innerHTML=`v0.22のSL最適化はまだ未有効です。<strong>「再計算＋校正」</strong>を1回押すと、戦略実績・勝ち組MAE・推奨T-SL帯・現SL EVまで表示します。`;
+      bar.innerHTML=`v0.24.4では約定基準を<strong>翌営業日始値</strong>へ変更しました。旧校正データは使用しません。<strong>「再計算＋校正」</strong>を1回押してください。`;
       btn.textContent="再計算＋校正";
       return;
     }
 
     const when=cal.generatedAt ? new Date(cal.generatedAt).toLocaleString("ja-JP") : "日時不明";
-    const waitReady=Number(cal.pathSchema||0)>=2&&Number(cal.pathDays||0)>=40;
+    const waitReady=Number(cal.pathSchema||0)>=3&&Number(cal.pathDays||0)>=40&&cal.executionBasis==="NEXT_OPEN";
     bar.className=waitReady?"calibration-status ok":"calibration-status warn";
     bar.innerHTML=`Strategy Calibration 3.2 有効 ・ ${cal.symbols?.length||0}銘柄 / ${cal.samples||cal.samplesCompact.length}サンプル<br>
       SL最適化：有効（勝ち組MAE / 推奨T-SL / 2R・SL先着 / R期待値） ・
-      T-SL待ち検証：${waitReady?"有効":"再校正で有効"} ・ 校正 ${esc(when)}`;
+      T-SL待ち検証：${waitReady?"有効":"再校正で有効"} ・ 実行基準：翌営業日始値 ・ 校正 ${esc(when)}`;
     btn.textContent=waitReady?"再計算":"再計算＋校正";
   }
 
@@ -5744,7 +5823,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0243.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0244.js",{
           updateViaCache:"none"
         });
         await reg.update();
