@@ -724,6 +724,42 @@
     .wait-compare-table tr.immediate td{
       background:rgba(255,255,255,.018);
     }
+    .next-open-zone-box{
+      margin-top:8px;padding:9px;border-radius:10px;
+      border:1px solid rgba(102,174,255,.22);
+      background:rgba(102,174,255,.04);
+    }
+    .next-open-zone-top{
+      display:flex;align-items:flex-start;justify-content:space-between;gap:8px;
+    }
+    .next-open-zone-kicker{font-size:7px;color:var(--muted);font-weight:900}
+    .next-open-zone-value{
+      margin-top:2px;font-size:13px;line-height:1.15;font-weight:1000;color:var(--text);
+      letter-spacing:-.2px;
+    }
+    .next-open-zone-chip{
+      display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+      border:1px solid rgba(102,174,255,.26);color:#b8ddff;font-weight:900;
+      white-space:nowrap;font-size:7px;
+    }
+    .next-open-zone-chip.good{border-color:rgba(104,227,193,.26);color:#bfead9}
+    .next-open-zone-chip.warn{border-color:rgba(255,193,94,.28);color:#ffd58b}
+    .next-open-zone-grid{
+      display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:5px 10px;margin-top:8px;font-size:7px;color:var(--muted);
+    }
+    .next-open-zone-grid strong{color:var(--text)}
+    .next-open-zone-grid .good strong{color:var(--green)}
+    .next-open-zone-grid .bad strong{color:var(--red)}
+    .next-open-zone-action{
+      margin-top:7px;padding:6px 7px;border-radius:8px;
+      background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.05);
+      font-size:7px;color:var(--muted);line-height:1.55;
+    }
+    .next-open-zone-action strong{color:var(--text)}
+    .next-open-zone-action .good{color:var(--green)}
+    .next-open-zone-action .warn{color:#ffd58b}
+    .next-open-zone-note{margin-top:6px;font-size:7px;color:var(--muted);line-height:1.5}
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -734,7 +770,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.24.4</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24.5</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -3129,6 +3165,176 @@
     };
   }
 
+  function fmtSignedPct(v,digits=1){
+    const n=Number(v||0);
+    const eps=Math.pow(10,-digits)/2;
+    const z=Math.abs(n)<eps?0:n;
+    return `${z>0?"+":""}${z.toFixed(digits)}%`;
+  }
+
+  function nextOpenGapStats(rows){
+    const valid=(rows||[]).filter(x=>
+      Number.isFinite(Number(x?.eg))&&
+      Number.isFinite(Number(x?.fr))
+    );
+    if(!valid.length) return null;
+
+    const rets=valid.map(x=>Number(x.fr));
+    const mfes=valid.map(x=>Number(x.mf)).filter(Number.isFinite);
+    const maes=valid.map(x=>Number(x.ma)).filter(Number.isFinite);
+    const wins=rets.filter(x=>x>0).length;
+    const hit2=valid.filter(x=>Number(x.h2||0)===1).length;
+    const touchSL=valid.filter(x=>Number(x.hs||0)===1).length;
+
+    return {
+      n:valid.length,
+      winRate:round1(wins/valid.length*100),
+      avgReturn:round1(avg(rets)),
+      medianReturn:round1(median(rets)),
+      avgMfe:round1(mfes.length?avg(mfes):0),
+      avgMae:round1(maes.length?avg(maes):0),
+      hit2RRate:round1(hit2/valid.length*100),
+      touchSLRate:round1(touchSL/valid.length*100)
+    };
+  }
+
+  function analyzeNextOpenEntryZone(rows){
+    const valid=(rows||[]).filter(x=>
+      Number.isFinite(Number(x?.eg))&&
+      Number.isFinite(Number(x?.fr))
+    );
+
+    if(valid.length<12){
+      return {
+        available:false,
+        reason:`翌営業日始値の類似サンプル不足（${valid.length}/12）`
+      };
+    }
+
+    const baseline=nextOpenGapStats(valid);
+    const gaps=valid.map(x=>Number(x.eg)).sort((a,b)=>a-b);
+
+    // Ignore the sparsest 10% tails when proposing a practical zone.
+    // We still report those observations separately instead of extrapolating
+    // an entry permission into scarcely observed gaps.
+    const p10=Number(percentile(gaps,.10));
+    const p90=Number(percentile(gaps,.90));
+    const rawFloor=Math.max(-8,Math.floor(p10*2)/2);
+    const rawCeil=Math.min(8,Math.ceil(p90*2)/2);
+
+    const floor=Math.min(rawFloor,rawCeil-0.5);
+    const ceil=Math.max(rawCeil,floor+0.5);
+    const bounds=[];
+    for(let v=floor;v<=ceil+1e-9;v+=0.5) bounds.push(round1(v));
+
+    const minN=Math.max(10,Math.ceil(valid.length*0.35));
+    const avgFloor=baseline.avgReturn-Math.max(1.5,Math.abs(baseline.avgReturn)*0.15);
+    const winFloor=Math.max(50,baseline.winRate-7);
+    const medianFloor=baseline.medianReturn>=0?Math.max(-0.5,baseline.medianReturn-6):baseline.medianReturn-2;
+    const touchCeil=Math.min(100,baseline.touchSLRate+8);
+
+    const candidates=[];
+    for(let i=0;i<bounds.length-1;i++){
+      for(let j=i+1;j<bounds.length;j++){
+        const lo=bounds[i], hi=bounds[j];
+        const subset=valid.filter(x=>Number(x.eg)>=lo-1e-9&&Number(x.eg)<=hi+1e-9);
+        if(subset.length<minN) continue;
+
+        const st=nextOpenGapStats(subset);
+        if(!st) continue;
+        const coverage=round1(subset.length/valid.length*100);
+        if(coverage<35) continue;
+
+        const width=hi-lo;
+        const edgeSpan=Math.min(1,Math.max(0.5,width/3));
+        const lowEdge=subset.filter(x=>Number(x.eg)<=lo+edgeSpan+1e-9).length;
+        const highEdge=subset.filter(x=>Number(x.eg)>=hi-edgeSpan-1e-9).length;
+        if(width>=1.5&&(lowEdge<2||highEdge<2)) continue;
+
+        const preserves=
+          st.winRate>=winFloor&&
+          st.avgReturn>=avgFloor&&
+          st.medianReturn>=medianFloor&&
+          st.touchSLRate<=touchCeil;
+        if(!preserves) continue;
+
+        candidates.push({
+          lower:lo,upper:hi,width,coverage,lowEdge,highEdge,stats:st,
+          avgDelta:round1(st.avgReturn-baseline.avgReturn),
+          winDelta:round1(st.winRate-baseline.winRate)
+        });
+      }
+    }
+
+    if(!candidates.length){
+      return {
+        available:false,
+        reason:"成績を大きく損なわずに維持できる連続ギャップ帯を十分なサンプルで確認できませんでした",
+        baseline,p10:round1(p10),p90:round1(p90)
+      };
+    }
+
+    // This is intentionally NOT an optimizer for the highest-return tiny bin.
+    // Prefer the broadest well-supported, performance-preserving interval.
+    candidates.sort((a,b)=>
+      b.coverage-a.coverage ||
+      b.width-a.width ||
+      b.stats.avgReturn-a.stats.avgReturn ||
+      b.stats.winRate-a.stats.winRate
+    );
+    const best=candidates[0];
+
+    const below=valid.filter(x=>Number(x.eg)<best.lower-1e-9);
+    const above=valid.filter(x=>Number(x.eg)>best.upper+1e-9);
+    const belowStats=below.length>=4?nextOpenGapStats(below):null;
+    const aboveStats=above.length>=4?nextOpenGapStats(above):null;
+
+    const samplePts=valid.length>=40?30:valid.length>=30?27:valid.length>=20?22:16;
+    const coveragePts=best.coverage>=65?25:best.coverage>=55?22:best.coverage>=45?18:14;
+    const edgeMin=Math.min(best.lowEdge,best.highEdge);
+    const edgePts=edgeMin>=4?20:edgeMin>=3?17:edgeMin>=2?13:8;
+    const performancePts=
+      best.stats.avgReturn>=baseline.avgReturn&&best.stats.winRate>=baseline.winRate?25:
+      best.stats.avgReturn>=baseline.avgReturn-0.75&&best.stats.winRate>=baseline.winRate-3?21:
+      17;
+    const confidenceScore=Math.max(0,Math.min(100,samplePts+coveragePts+edgePts+performancePts));
+    const confidence=confidenceScore>=80?"高":confidenceScore>=60?"中":"低";
+
+    const upperWeak=aboveStats&&(
+      aboveStats.avgReturn<best.stats.avgReturn-2 ||
+      aboveStats.winRate<best.stats.winRate-10 ||
+      aboveStats.touchSLRate>best.stats.touchSLRate+10
+    );
+    const lowerWeak=belowStats&&(
+      belowStats.avgReturn<best.stats.avgReturn-2 ||
+      belowStats.winRate<best.stats.winRate-10 ||
+      belowStats.touchSLRate>best.stats.touchSLRate+10
+    );
+
+    return {
+      available:true,
+      lower:round1(best.lower),
+      upper:round1(best.upper),
+      coverage:best.coverage,
+      sampleN:valid.length,
+      zoneN:best.stats.n,
+      confidence,
+      confidenceScore,
+      stats:best.stats,
+      baseline,
+      avgDelta:best.avgDelta,
+      winDelta:best.winDelta,
+      p10:round1(p10),
+      p90:round1(p90),
+      belowN:below.length,
+      aboveN:above.length,
+      belowStats,
+      aboveStats,
+      lowerWeak:!!lowerWeak,
+      upperWeak:!!upperWeak
+    };
+  }
+
   function analyzeWaitEntry(rows,currentSL,structuralSL){
     if(!rows.length||!(currentSL>0)) return null;
 
@@ -3185,6 +3391,11 @@
       missedWinnerRate:0,
       medianFillDay:0
     };
+
+    // v0.24.5: data-backed acceptable range for the actual next-session OPEN
+    // relative to the signal close. Existing v0.24.4 path data already contains
+    // execution gap (eg), so this feature does not require a schema migration.
+    const nextOpenZone=analyzeNextOpenEntryZone(schemaRows);
 
     // Recommended wait must not be deeper than the current Tactical SL.
     // Deeper rows may still appear in the comparison table as reference values.
@@ -3517,6 +3728,7 @@
       rowsN:schemaRows.length,
       current,
       immediate,
+      nextOpenZone,
       best,
       entryZone,
       recommendation,
@@ -3876,7 +4088,7 @@
       calibration.executionBasis!=="NEXT_OPEN"
     ){
       box.innerHTML=`<div class="bt-note">
-        v0.24.4ではバックテストの約定基準を<strong>翌営業日始値</strong>へ変更しました。
+        v0.24.5はv0.24.4の翌営業日始値基準を引き継ぎ、<strong>翌日寄りEntry Zone</strong>を追加しました。
         旧校正データは混在させません。<strong>「類似校正」</strong>を1回実行してください。
       </div>`;
       return;
@@ -3884,7 +4096,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.24.4）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.24.5）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -4150,6 +4362,7 @@
     const s=emp.stats;
     const z=emp.slAnalysis;
     const w=emp.waitAnalysis;
+    const gz=w?.nextOpenZone||null;
 
     const waitBox=w?(
       !w.available
@@ -4215,6 +4428,60 @@
                   <div class="${w.recommendation.avgReturn>=0?"good":""}">約定後平均 <strong>${w.recommendation.avgReturn>=0?"+":""}${w.recommendation.avgReturn.toFixed(1)}%</strong></div>
                   <div class="${w.recommendation.perSignalAvg>=0?"good":""}">全信号平均 <strong>${w.recommendation.perSignalAvg>=0?"+":""}${w.recommendation.perSignalAvg.toFixed(1)}%</strong></div>
                 </div>
+
+                ${gz?.available?`
+                  <div class="next-open-zone-box">
+                    <div class="next-open-zone-top">
+                      <div>
+                        <div class="next-open-zone-kicker">翌日寄り Entry Zone</div>
+                        <div class="next-open-zone-value">${fmtSignedPct(gz.lower)} 〜 ${fmtSignedPct(gz.upper)}</div>
+                      </div>
+                      <span class="next-open-zone-chip ${gz.confidence==="高"?"good":gz.confidence==="低"?"warn":""}">
+                        判定確度 ${gz.confidence} ${gz.confidenceScore}
+                      </span>
+                    </div>
+                    <div class="next-open-zone-grid">
+                      <div>Zone内 <strong>${gz.zoneN}/${gz.sampleN}</strong></div>
+                      <div>カバー率 <strong>${gz.coverage.toFixed(0)}%</strong></div>
+                      <div class="${gz.stats.winRate>=60?"good":""}">20D勝率 <strong>${gz.stats.winRate.toFixed(0)}%</strong></div>
+                      <div class="${gz.stats.avgReturn>=0?"good":"bad"}">平均 <strong>${gz.stats.avgReturn>=0?"+":""}${gz.stats.avgReturn.toFixed(1)}%</strong></div>
+                      <div>中央値 <strong>${gz.stats.medianReturn>=0?"+":""}${gz.stats.medianReturn.toFixed(1)}%</strong></div>
+                      <div>SL接触 <strong>${gz.stats.touchSLRate.toFixed(0)}%</strong></div>
+                    </div>
+                    <div class="next-open-zone-action">
+                      ${w.recommendation.kind==="immediate"
+                        ? `<strong>実戦ルール：</strong> 翌日始値が <span class="good">${fmtSignedPct(gz.lower)}〜${fmtSignedPct(gz.upper)}</span> なら寄りエントリー許容。`
+                        : `<strong>参考：</strong> 主推奨は押し目待ちですが、寄りで入るなら <span class="good">${fmtSignedPct(gz.lower)}〜${fmtSignedPct(gz.upper)}</span> を許容帯として扱います。`}
+                      ${gz.upperWeak
+                        ? ` <span class="warn">${fmtSignedPct(gz.upper)}超は過去成績が悪化しており、追いかけず押し目代替を優先。</span>`
+                        : ` ${fmtSignedPct(gz.upper)}超はZone外として追いかけず、押し目代替を優先。`}
+                      ${gz.lowerWeak
+                        ? ` ${fmtSignedPct(gz.lower)}未満は下落ギャップ側の成績悪化を確認しているため要因確認。`
+                        : ` ${fmtSignedPct(gz.lower)}未満はZone外なので、材料・ギャップ要因を確認。`}
+                    </div>
+                    ${gz.aboveStats?`
+                      <div class="next-open-zone-note">
+                        上限超え実績 n=${gz.aboveStats.n} / 勝率 ${gz.aboveStats.winRate.toFixed(0)}% / 平均 ${gz.aboveStats.avgReturn>=0?"+":""}${gz.aboveStats.avgReturn.toFixed(1)}%。
+                        Zone平均との差 ${gz.avgDelta>=0?"+":""}${gz.avgDelta.toFixed(1)}pt。
+                      </div>
+                    `:""}
+                    <div class="next-open-zone-note">
+                      シグナル日終値に対する翌営業日始値のギャップ率で判定します。
+                      最高成績の狭い一点ではなく、類似局面の10〜90%観測範囲内で、基準の勝率・平均・中央値・SL接触率を大きく悪化させない最も広い連続帯を採用します。
+                    </div>
+                  </div>
+                `:gz?`
+                  <div class="next-open-zone-box">
+                    <div class="next-open-zone-top">
+                      <div>
+                        <div class="next-open-zone-kicker">翌日寄り Entry Zone</div>
+                        <div class="next-open-zone-value">参考外</div>
+                      </div>
+                      <span class="next-open-zone-chip warn">未評価</span>
+                    </div>
+                    <div class="next-open-zone-note">${esc(gz.reason||"翌日始値ギャップの比較データが不足しています。")}</div>
+                  </div>
+                `:""}
 
                 ${w.alternative?`
                   <div class="entry-alt-box">
@@ -5823,7 +6090,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0244.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0245.js",{
           updateViaCache:"none"
         });
         await reg.update();
