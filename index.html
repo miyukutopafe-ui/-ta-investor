@@ -650,6 +650,43 @@
       color:var(--muted);font-size:7px;line-height:1.55;
     }
     .wait-ref-box strong{color:var(--text)}
+    .entry-zone-box{
+      margin-top:9px;padding:10px;border-radius:10px;
+      border:1px solid rgba(83,211,255,.22);
+      background:rgba(83,211,255,.045);
+    }
+    .entry-zone-top{
+      display:flex;align-items:flex-start;justify-content:space-between;gap:8px;
+    }
+    .entry-zone-kicker{font-size:7px;color:var(--muted);font-weight:900}
+    .entry-zone-value{
+      margin-top:2px;font-size:14px;line-height:1.1;font-weight:1000;color:var(--text);
+      letter-spacing:-.3px;
+    }
+    .entry-zone-chip{
+      display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+      border:1px solid rgba(104,227,193,.24);color:#bfead9;font-weight:900;
+      white-space:nowrap;font-size:7px;
+    }
+    .entry-zone-chip.warn{
+      border-color:rgba(255,193,94,.26);color:#ffd58b;
+    }
+    .entry-zone-grid{
+      display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:5px 10px;margin-top:8px;font-size:7px;color:var(--muted);
+    }
+    .entry-zone-grid strong{color:var(--text)}
+    .entry-zone-grid .good strong{color:var(--green)}
+    .entry-zone-foot{
+      margin-top:7px;padding-top:7px;border-top:1px solid rgba(255,255,255,.055);
+      font-size:7px;color:var(--muted);line-height:1.5;
+    }
+    .wait-compare-table tr.zone td{
+      background:rgba(83,211,255,.035);
+    }
+    .wait-compare-table tr.immediate td{
+      background:rgba(255,255,255,.018);
+    }
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -660,7 +697,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.24.1</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24.2</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -877,7 +914,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.24.1";
+  const APP_BUILD = "0.24.2";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -3023,44 +3060,164 @@
       schemaRows,currentSL,cancelPct,maxWaitDays,holdDays
     );
 
-    let maxDepth=Math.max(currentSL,10);
-    if(structuralSL>0) maxDepth=Math.min(15,Math.max(currentSL,structuralSL*.90));
-    else maxDepth=Math.min(15,Math.max(currentSL,currentSL*1.5));
-    maxDepth=Math.max(3,maxDepth);
+    // Immediate-entry 20D baseline from the same selected historical set.
+    const immediateReturns=schemaRows
+      .map(x=>Number(x.fr))
+      .filter(Number.isFinite);
+    const immediate={
+      available:immediateReturns.length>0,
+      n:immediateReturns.length,
+      fillN:immediateReturns.length,
+      fillRate:100,
+      runawayRate:0,
+      ambiguousRate:0,
+      noFillRate:0,
+      winRate:immediateReturns.length
+        ? round1(immediateReturns.filter(x=>x>0).length/immediateReturns.length*100)
+        : 0,
+      avgReturn:immediateReturns.length ? round1(avg(immediateReturns)) : 0,
+      medianReturn:immediateReturns.length ? round1(median(immediateReturns)) : 0,
+      avgMfe:0,
+      avgMae:0,
+      sameExitWinRate:0,
+      sameExitAvg:0,
+      winDelta:0,
+      avgDelta:0,
+      perSignalAvg:immediateReturns.length ? round1(avg(immediateReturns)) : 0,
+      missedWinnerRate:0,
+      medianFillDay:0
+    };
 
-    let best=null;
-    for(let wait=2;wait<=maxDepth+1e-9;wait+=0.5){
+    // Recommended wait must not be deeper than the current Tactical SL.
+    // Deeper rows may still appear in the comparison table as reference values.
+    const recommendDepth=Math.max(0.5,Math.min(15,currentSL));
+
+    const dense=[];
+    if(immediate.available){
+      dense.push({
+        waitPct:0,
+        isImmediate:true,
+        objective:immediate.perSignalAvg,
+        ...immediate
+      });
+    }
+
+    for(let wait=0.5;wait<=recommendDepth+1e-9;wait+=0.5){
       const sim=simulateWaitEntrySet(
         schemaRows,wait,cancelPct,maxWaitDays,holdDays
       );
       if(!sim?.available||sim.fillN<8||sim.fillRate<15) continue;
 
+      // Light penalty only for very small fill samples.
       const qualityPenalty=sim.fillN<12?0.4:0;
-      const objective=sim.perSignalAvg-qualityPenalty;
+      dense.push({
+        waitPct:round1(wait),
+        objective:sim.perSignalAvg-qualityPenalty,
+        ...sim
+      });
+    }
 
-      if(!best||objective>best.objective){
-        best={
-          waitPct:round1(wait),
-          objective,
-          fillRate:sim.fillRate,
-          fillN:sim.fillN,
-          winRate:sim.winRate,
-          avgReturn:sim.avgReturn,
-          perSignalAvg:sim.perSignalAvg
+    let best=null;
+    for(const x of dense){
+      if(!best||x.objective>best.objective){
+        best={...x};
+      }
+    }
+
+    // Entry Zone:
+    // Rather than presenting a single optimized number, use the contiguous band
+    // around the best point that retains at least ~90% of the best objective
+    // (or remains within 0.75 percentage point).
+    let entryZone=null;
+    if(best&&dense.length){
+      const sorted=[...dense].sort((a,b)=>a.waitPct-b.waitPct);
+      const bestIndex=sorted.findIndex(x=>Math.abs(x.waitPct-best.waitPct)<0.05);
+      const tolerance=Math.max(0.75,Math.abs(best.objective)*0.10);
+      const threshold=best.objective-tolerance;
+
+      const qualifies=x=>
+        x.objective>=threshold &&
+        (x.isImmediate || (x.fillN>=8&&x.fillRate>=15));
+
+      let left=bestIndex;
+      let right=bestIndex;
+
+      while(left>0){
+        const prev=sorted[left-1];
+        const cur=sorted[left];
+        const contiguous=Math.abs((cur.waitPct-prev.waitPct)-0.5)<0.06 ||
+          (prev.waitPct===0&&cur.waitPct===0.5);
+        if(!contiguous||!qualifies(prev)) break;
+        left--;
+      }
+
+      while(right<sorted.length-1){
+        const cur=sorted[right];
+        const next=sorted[right+1];
+        const contiguous=Math.abs((next.waitPct-cur.waitPct)-0.5)<0.06 ||
+          (cur.waitPct===0&&next.waitPct===0.5);
+        if(!contiguous||!qualifies(next)) break;
+        right++;
+      }
+
+      const zoneRows=sorted.slice(left,right+1).filter(qualifies);
+      if(zoneRows.length){
+        const waits=zoneRows.map(x=>x.waitPct);
+        entryZone={
+          from:Math.min(...waits),
+          to:Math.max(...waits),
+          bestWait:best.waitPct,
+          bestIsImmediate:!!best.isImmediate,
+          avgFillRate:round1(avg(zoneRows.map(x=>x.fillRate))),
+          avgWinRate:round1(avg(zoneRows.map(x=>x.winRate))),
+          avgReturn:round1(avg(zoneRows.map(x=>x.avgReturn))),
+          avgPerSignal:round1(avg(zoneRows.map(x=>x.perSignalAvg))),
+          bestPerSignal:round1(best.perSignalAvg),
+          bestWinRate:round1(best.winRate),
+          bestFillRate:round1(best.fillRate),
+          points:zoneRows.length,
+          threshold:round1(threshold),
+          atLowerBoundary:best.waitPct===0,
+          atFirstWaitBoundary:best.waitPct===0.5,
+          confidence:
+            zoneRows.length>=3&&schemaRows.length>=30&&best.fillN>=15
+              ? "高"
+              : zoneRows.length>=2&&best.fillN>=10
+                ? "中"
+                : "低"
         };
       }
     }
 
-    const comparisonRaw=[2,4,6,currentSL];
+    // Fine comparison requested for practical use.
+    // T-SL is always included. Rows deeper than T-SL are reference-only.
+    const comparisonRaw=[0,0.5,1,1.5,2,3,4,6,currentSL];
     const comparisonLevels=[];
+
     for(const level of comparisonRaw){
       const v=round1(Number(level||0));
-      if(!(v>0)) continue;
+      if(v<0) continue;
       if(comparisonLevels.some(x=>Math.abs(x.waitPct-v)<0.05)) continue;
+
+      if(v===0){
+        if(immediate.available){
+          comparisonLevels.push({
+            waitPct:0,
+            isImmediate:true,
+            isCurrent:false,
+            beyondCurrent:false,
+            ...immediate
+          });
+        }
+        continue;
+      }
+
       const sim=simulateWaitEntrySet(schemaRows,v,cancelPct,maxWaitDays,holdDays);
       if(!sim?.available) continue;
+
       comparisonLevels.push({
         waitPct:v,
+        isImmediate:false,
         isCurrent:Math.abs(v-currentSL)<0.05,
         beyondCurrent:v>currentSL+0.05,
         ...sim
@@ -3068,22 +3225,32 @@
     }
 
     if(best && !comparisonLevels.some(x=>Math.abs(x.waitPct-best.waitPct)<0.05)){
-      const sim=simulateWaitEntrySet(
-        schemaRows,best.waitPct,cancelPct,maxWaitDays,holdDays
-      );
-      if(sim?.available){
+      if(best.waitPct===0){
         comparisonLevels.push({
-          waitPct:best.waitPct,
-          isCurrent:Math.abs(best.waitPct-currentSL)<0.05,
-          beyondCurrent:best.waitPct>currentSL+0.05,
-          isBest:true,
-          ...sim
+          waitPct:0,isImmediate:true,isCurrent:false,beyondCurrent:false,...immediate
         });
+      }else{
+        const sim=simulateWaitEntrySet(
+          schemaRows,best.waitPct,cancelPct,maxWaitDays,holdDays
+        );
+        if(sim?.available){
+          comparisonLevels.push({
+            waitPct:best.waitPct,
+            isImmediate:false,
+            isCurrent:Math.abs(best.waitPct-currentSL)<0.05,
+            beyondCurrent:best.waitPct>currentSL+0.05,
+            isBest:true,
+            ...sim
+          });
+        }
       }
     }
 
     for(const x of comparisonLevels){
       if(best && Math.abs(x.waitPct-best.waitPct)<0.05) x.isBest=true;
+      if(entryZone){
+        x.inZone=x.waitPct>=entryZone.from-0.05&&x.waitPct<=entryZone.to+0.05;
+      }
     }
 
     comparisonLevels.sort((a,b)=>a.waitPct-b.waitPct);
@@ -3097,7 +3264,9 @@
       holdDays,
       rowsN:schemaRows.length,
       current,
+      immediate,
       best,
+      entryZone,
       comparisonLevels
     };
   }
@@ -3446,7 +3615,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.24.1）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.24.2）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3748,10 +3917,49 @@
               <div>上へ走って未約定 <strong>${q.runawayRate.toFixed(0)}%</strong></div>
               <div>未約定の元20D勝ち <strong>${q.missedWinnerRate.toFixed(0)}%</strong></div>
               ${w.best?`
-                <div>参考・最適待ち <strong>-${w.best.waitPct.toFixed(1)}%</strong></div>
-                <div>その約定率 <strong>${w.best.fillRate.toFixed(0)}%</strong></div>
+                <div>Best <strong>${w.best.waitPct===0?"即買い":`-${w.best.waitPct.toFixed(1)}%`}</strong></div>
+                <div>Best全信号 <strong>${w.best.perSignalAvg>=0?"+":""}${w.best.perSignalAvg.toFixed(1)}%</strong></div>
               `:""}
             </div>
+
+            ${w.entryZone?`
+              <div class="entry-zone-box">
+                <div class="entry-zone-top">
+                  <div>
+                    <div class="entry-zone-kicker">推奨 Entry Zone</div>
+                    <div class="entry-zone-value">${
+                      w.entryZone.from===0
+                        ? (w.entryZone.to===0
+                            ? "即買い"
+                            : `即買い〜-${w.entryZone.to.toFixed(1)}%`)
+                        : (Math.abs(w.entryZone.from-w.entryZone.to)<0.05
+                            ? `-${w.entryZone.from.toFixed(1)}%前後`
+                            : `-${w.entryZone.from.toFixed(1)}〜-${w.entryZone.to.toFixed(1)}%`)
+                    }</div>
+                  </div>
+                  <span class="entry-zone-chip ${w.entryZone.confidence==="低"?"warn":""}">
+                    安定度 ${w.entryZone.confidence}
+                  </span>
+                </div>
+                <div class="entry-zone-grid">
+                  <div>代表Best <strong>${w.entryZone.bestWait===0?"即買い":`-${w.entryZone.bestWait.toFixed(1)}%`}</strong></div>
+                  <div>ゾーン点数 <strong>${w.entryZone.points}</strong></div>
+                  <div>ゾーン平均約定 <strong>${w.entryZone.avgFillRate.toFixed(0)}%</strong></div>
+                  <div class="${w.entryZone.avgWinRate>=60?"good":""}">ゾーン平均勝率 <strong>${w.entryZone.avgWinRate.toFixed(0)}%</strong></div>
+                  <div class="${w.entryZone.avgReturn>=0?"good":""}">約定後平均 <strong>${w.entryZone.avgReturn>=0?"+":""}${w.entryZone.avgReturn.toFixed(1)}%</strong></div>
+                  <div class="${w.entryZone.avgPerSignal>=0?"good":""}">全信号平均 <strong>${w.entryZone.avgPerSignal>=0?"+":""}${w.entryZone.avgPerSignal.toFixed(1)}%</strong></div>
+                </div>
+                <div class="entry-zone-foot">
+                  単一の「最適値」ではなく、全シグナル換算成績がBestの約90%以内
+                  （最低でも0.75pt以内）を保つ連続帯をEntry Zoneとして表示します。
+                  ${w.entryZone.atLowerBoundary
+                    ? " 今回は即買いが探索上のBestです。無理に押し目待ちをする優位性は確認されていません。"
+                    : w.entryZone.atFirstWaitBoundary
+                      ? " Bestが最初の待ち幅-0.5%にあります。ほぼ即買いに近い浅い押しが有利な可能性があります。"
+                      : ""}
+                </div>
+              </div>
+            `:""}
 
             ${Array.isArray(w.comparisonLevels)&&w.comparisonLevels.length
               ? `<div class="wait-compare">
@@ -3771,11 +3979,18 @@
                     </thead>
                     <tbody>
                       ${w.comparisonLevels.map(x=>`
-                        <tr class="${x.isBest?"best":x.isCurrent?"current":""}">
+                        <tr class="${
+                          x.isBest?"best":
+                          x.isCurrent?"current":
+                          x.inZone?"zone":
+                          x.isImmediate?"immediate":""
+                        }">
                           <td>
-                            -${x.waitPct.toFixed(1)}%
+                            ${x.isImmediate?"即買い":`-${x.waitPct.toFixed(1)}%`}
                             ${x.isCurrent?`<span class="wait-compare-tag">T-SL</span>`:""}
-                            ${x.isBest?`<span class="wait-compare-tag">最適</span>`:""}
+                            ${x.isBest?`<span class="wait-compare-tag">Best</span>`:""}
+                            ${x.inZone&&!x.isBest?`<span class="wait-compare-tag">Zone</span>`:""}
+                            ${x.beyondCurrent?`<span class="wait-compare-tag">参考</span>`:""}
                           </td>
                           <td>${x.fillRate.toFixed(0)}%</td>
                           <td>${x.winRate.toFixed(0)}%</td>
@@ -3790,9 +4005,10 @@
                     </tbody>
                   </table>
                   <div class="wait-entry-note">
-                    「平均」は約定したケースだけの20D平均。「全信号」は未約定を0%として含めた平均です。
+                    「即買い」は同じ類似局面をシグナル日に買って20営業日保有した基準値です。
+                    「平均」は待ち指値が約定したケースだけの20D平均、「全信号」は未約定を0%として含めた平均です。
                     ${w.comparisonLevels.some(x=>x.beyondCurrent)
-                      ? ` 現T-SLより深い待ち水準は、現在のセットアップなら本来損切り域を超えるため参考値です。`
+                      ? ` 現T-SLより深い待ち水準は、本来の損切り域を超えるため参考値です。`
                       : ""}
                   </div>
                 </div>`
@@ -5315,7 +5531,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0241.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0242.js",{
           updateViaCache:"none"
         });
         await reg.update();
