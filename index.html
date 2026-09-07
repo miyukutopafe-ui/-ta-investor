@@ -447,6 +447,47 @@
     .trigger-side{padding:9px;border-radius:11px;background:var(--card2);border:1px solid var(--line)}
     .trigger-side .k{font-size:9px;color:var(--muted)}
     .trigger-side .v{font-size:15px;font-weight:900;margin-top:2px}
+    .rank-summary{
+      margin:10px 0 12px;padding:10px;border-radius:14px;
+      background:linear-gradient(135deg,rgba(74,216,255,.07),rgba(104,227,193,.035));
+      border:1px solid rgba(74,216,255,.16);
+    }
+    .rank-summary:empty{display:none}
+    .rank-head{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-bottom:8px}
+    .rank-head .title2{font-size:12px;font-weight:950}
+    .rank-head .note{font-size:8px;color:var(--muted)}
+    .rank-top3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+    .rank-pick{
+      min-width:0;padding:9px 8px;border-radius:11px;background:var(--card2);
+      border:1px solid var(--line);cursor:pointer;
+    }
+    .rank-pick.first{border-color:rgba(74,216,255,.36);background:rgba(74,216,255,.06)}
+    .rank-pick .pos{font-size:8px;color:var(--muted);font-weight:900}
+    .rank-pick .sym{font-size:14px;font-weight:950;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rank-pick .score{font-size:22px;font-weight:950;line-height:1;margin-top:5px}
+    .rank-pick .meta{font-size:7px;color:var(--muted);line-height:1.35;margin-top:5px}
+    .watch-rank-card{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      margin-top:10px;padding:10px 11px;border-radius:12px;
+      background:linear-gradient(135deg,rgba(74,216,255,.07),rgba(104,227,193,.035));
+      border:1px solid rgba(74,216,255,.19);
+    }
+    .watch-rank-card.best{border-color:rgba(74,216,255,.40);box-shadow:inset 0 0 0 1px rgba(74,216,255,.05)}
+    .watch-rank-left{min-width:0}
+    .watch-rank-title{font-size:8px;color:var(--muted);font-weight:900}
+    .watch-rank-label{font-size:12px;font-weight:950;margin-top:3px}
+    .watch-rank-reason{font-size:7px;color:var(--muted);line-height:1.4;margin-top:5px}
+    .watch-rank-score{font-size:30px;font-weight:950;line-height:1;text-align:right}
+    .watch-rank-grade{font-size:8px;color:var(--muted);text-align:right;margin-top:3px}
+    .watch-factor-row{
+      display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;margin-top:7px;
+    }
+    .watch-factor{
+      min-width:0;padding:6px 3px;border-radius:8px;background:rgba(255,255,255,.025);
+      text-align:center;border:1px solid rgba(255,255,255,.045);
+    }
+    .watch-factor .k{font-size:6.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .watch-factor .v{font-size:10px;font-weight:900;margin-top:2px}
     .strategy-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
     .strategy-card{padding:11px;border-radius:13px;background:var(--card2);border:1px solid var(--line)}
     .strategy-card.best{border-color:rgba(74,216,255,.35);background:rgba(74,216,255,.055)}
@@ -541,7 +582,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.22.5</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.23</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -577,7 +618,7 @@
         <div class="screen-head">
           <div class="grow">
             <h2>スクリーナー</h2>
-            <p>Timing＝今のシグナル完成度。順張り優先度はStage 2系、反転優先度は売られ過ぎ＋強気DIV系を別々に評価します。</p>
+            <p>監視Rank＝「今どの銘柄を先に見るか」の順位です。Stage・Timing・順張り/反転優先度・類似実績・T-SL・52週位置を統合します。買い推奨ではなく、監視の優先順位です。</p>
           </div>
           <button class="secondary" id="scanRefreshBtn">再計算</button>
         </div>
@@ -585,6 +626,7 @@
 
         <div class="preset-scroll">
           <button class="preset active" data-preset="all">すべて</button>
+          <button class="preset" data-preset="priority">優先監視</button>
           <button class="preset" data-preset="pullback">押し目</button>
           <button class="preset" data-preset="divergence">DIV反転</button>
           <button class="preset" data-preset="breakout">ブレイク</button>
@@ -595,6 +637,7 @@
         <div class="sort-row">
           <div class="small-label">並び順</div>
           <select id="screenSort" class="sort-select">
+            <option value="watchRank">監視ランキング</option>
             <option value="timing">タイミング順</option>
             <option value="ta">TA強度順</option>
             <option value="div">強気DIV順</option>
@@ -617,6 +660,8 @@
           <div class="summary-box"><div class="k">該当</div><div class="v" id="scanMatch">0</div></div>
           <div class="summary-box"><div class="k">未判定</div><div class="v" id="scanMissing">0</div></div>
         </div>
+
+        <div id="watchRankSummary" class="rank-summary"></div>
 
         <div id="screenResults" class="screen-list"></div>
 
@@ -754,7 +799,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.22.5";
+  const APP_BUILD = "0.23";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -797,7 +842,7 @@
   let chartMode = "focus";
   let listMode = "watch";
   let screenPreset = "all";
-  let screenSort = "timing";
+  let screenSort="watchRank";
   let reorderMode = false;
   let chartPeriod = 126;
   let chartCrosshair = {active:false,index:null,date:null};
@@ -3075,7 +3120,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.22.5）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.23）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -3412,6 +3457,173 @@
     btn.textContent="再計算";
   }
 
+  // ---------- v0.23 Monitoring Rank ----------
+
+  function tacticalRiskQuality(stopPct){
+    const s=Number(stopPct)||0;
+    if(s<=0) return 50;
+    if(s<=5) return 100;
+    if(s<=7.5) return 92;
+    if(s<=10) return 80;
+    if(s<=12.5) return 66;
+    if(s<=15) return 50;
+    if(s<=20) return 30;
+    if(s<=25) return 15;
+    return 5;
+  }
+
+  function stageMonitoringFit(stage,type){
+    if(!stage) return 50;
+    const label=String(stage.label||"");
+    let v=50;
+
+    if(type==="reversal"){
+      if(stage.code===4) v=92;
+      else if(stage.code===3) v=88;
+      else if(stage.code===1) v=72;
+      else if(stage.code===2) v=42;
+      if(label.includes("3→4")) v=92;
+    }else{
+      if(stage.code===2){
+        if(label.includes("再加速")) v=100;
+        else if(label.includes("初動")||label.includes("1→2")) v=96;
+        else if(label.includes("継続")) v=88;
+        else if(label.includes("成熟")) v=62;
+        else v=82;
+      }else if(stage.code===1) v=68;
+      else if(stage.code===3) v=30;
+      else if(stage.code===4) v=15;
+    }
+
+    if(stage.provisional) v=50+(v-50)*0.55;
+    return round1(clamp(v,0,100));
+  }
+
+  function rangeMonitoringFit(range52,type){
+    if(!range52||!range52.full52) return 50;
+
+    const pos=Number(range52.position);
+    const fromLow=Number(range52.fromLow);
+    const fromHigh=Number(range52.fromHigh);
+
+    if(!Number.isFinite(pos)||!Number.isFinite(fromLow)||!Number.isFinite(fromHigh)) return 50;
+
+    // Corporate actions / insufficiently adjusted histories can produce absurd
+    // low-distance percentages. Do not let those dominate the rank.
+    if(fromLow>500 || fromLow<0 || fromHigh>5 || fromHigh<-95) return 50;
+
+    if(type==="reversal"){
+      if(pos<=10) return 100;
+      if(pos<=20) return 92;
+      if(pos<=35) return 80;
+      if(pos<=50) return 65;
+      if(pos<=70) return 48;
+      return 35;
+    }
+
+    // Trend setups generally deserve more monitoring near the upper half of
+    // the 52W range, but "at the high" is not given a giant bonus.
+    if(pos>=90) return 92;
+    if(pos>=75) return 100;
+    if(pos>=60) return 88;
+    if(pos>=45) return 72;
+    if(pos>=30) return 55;
+    return 38;
+  }
+
+  function empiricalMonitoringScore(emp){
+    if(!emp||emp.referenceOut||emp.empiricalScore==null){
+      return {score:50,label:"未検証",grade:"—"};
+    }
+    const g=empiricalTrustGrade(emp);
+    const raw=clamp(Number(emp.empiricalScore)||50,0,100);
+    // Low-confidence analogs are shrunk toward neutral instead of being used raw.
+    const adjusted=50+(raw-50)*g.weight;
+    return {
+      score:round1(clamp(adjusted,0,100)),
+      label:`${g.grade} ${Math.round(raw)}`,
+      grade:g.grade
+    };
+  }
+
+  function monitoringPriority(r,priority,empiricalBundle,range52){
+    const type=priority?.type==="reversal"?"reversal":"trend";
+    const strategy=clamp(Number(priority?.score)||0,0,100);
+    const timing=clamp(Number(r?.timingScore)||0,0,100);
+    const tacticalSL=Number(r?.tradePlan?.stopDistancePct||r?.timingBreakdown?.entryRiskPct||0);
+    const risk=tacticalRiskQuality(tacticalSL);
+    const stage=stageMonitoringFit(r?.stage,type);
+    const range=rangeMonitoringFit(range52,type);
+
+    const selectedEmp=type==="reversal"
+      ? (empiricalBundle?.reversal||empiricalBundle?.generic||null)
+      : (empiricalBundle?.trend||empiricalBundle?.generic||null);
+    const empirical=empiricalMonitoringScore(selectedEmp);
+
+    // Ranking layer, not a new entry model:
+    // 45% = already strategy-aware priority; other factors determine which
+    // setup deserves attention first right now.
+    let score=
+      strategy*0.45+
+      timing*0.15+
+      empirical.score*0.15+
+      risk*0.10+
+      stage*0.10+
+      range*0.05;
+
+    // A reference-out analog set is neutral, but a tiny completeness penalty
+    // prevents "unknown" from outranking an otherwise equal validated setup.
+    if(empirical.grade==="—") score-=2;
+
+    score=round1(clamp(score,0,100));
+
+    let label="低優先";
+    if(score>=80) label="最優先監視";
+    else if(score>=70) label="優先監視";
+    else if(score>=60) label="監視";
+    else if(score>=50) label="待ち";
+
+    const completeness=[
+      !r?.stage?.provisional,
+      empirical.grade!=="—",
+      !!range52?.full52
+    ].filter(Boolean).length;
+    const confidence=completeness===3?"高":completeness===2?"中":"参考";
+
+    const reasons=[];
+    reasons.push(`${type==="reversal"?"反転":"順張り"} ${Math.round(strategy)}`);
+    if(timing>=65) reasons.push(`Timing ${Math.round(timing)}`);
+    if(empirical.grade!=="—") reasons.push(`類似 ${empirical.label}`);
+    else reasons.push("類似未検証");
+    if(risk>=80) reasons.push(`T-SL良好 ${tacticalSL.toFixed(1)}%`);
+    else if(risk<=40) reasons.push(`T-SL広め ${tacticalSL.toFixed(1)}%`);
+    if(r?.stage?.label) reasons.push(r.stage.label);
+    if(range52?.full52) reasons.push(`52W位置 ${Math.round(range52.position)}%`);
+    else reasons.push("52W履歴不足");
+
+    return {
+      score,label,confidence,type,
+      factors:{
+        strategy:round1(strategy),
+        timing:round1(timing),
+        empirical:round1(empirical.score),
+        risk:round1(risk),
+        stage:round1(stage),
+        range:round1(range)
+      },
+      empirical,
+      reasons
+    };
+  }
+
+  function monitoringGrade(score){
+    if(score>=80) return "S";
+    if(score>=70) return "A";
+    if(score>=60) return "B";
+    if(score>=50) return "C";
+    return "D";
+  }
+
   // ---------- Rendering ----------
 
   function screenMetricsCore(item){
@@ -3481,6 +3693,9 @@
         priority=entryPriority(r,null);
       }
 
+      const range52=calc52WeekRange(c.candles);
+      const watchRank=monitoringPriority(r,priority,empiricalBundle,range52);
+
       return {
         item,r,
         pbDist:round1(pbDist),
@@ -3489,10 +3704,11 @@
         bullDiv:round1(bullDiv),
         bearDiv:round1(bearDiv),
         confirmedBull,
-        range52:calc52WeekRange(c.candles),
+        range52,
         empirical,
         empiricalBundle,
         priority,
+        watchRank,
         fallbackResult:!!evalError,
         evalError:evalError?String(evalError.message||evalError):null,
         calibrationError
@@ -3501,14 +3717,18 @@
       console.warn("Screener metrics failed:",item.symbol,err);
       try{
         const priority=entryPriority(r,null);
+        const range52=calc52WeekRange(c.candles);
+        const empiricalBundle={generic:null,trend:null,reversal:null};
+        const watchRank=monitoringPriority(r,priority,empiricalBundle,range52);
         return {
           item,r,
           pbDist:0,erDist:0,boDist:0,
           bullDiv:0,bearDiv:0,confirmedBull:false,
-          range52:calc52WeekRange(c.candles),
+          range52,
           empirical:null,
-          empiricalBundle:{generic:null,trend:null,reversal:null},
+          empiricalBundle,
           priority,
+          watchRank,
           fallbackResult:true,
           evalError:String(err.message||err),
           calibrationError:null
@@ -3545,6 +3765,8 @@
   function passesPreset(x){
     const r=x.r;
     switch(screenPreset){
+      case "priority":
+        return (x.watchRank?.score||0)>=70;
       case "pullback":
         return r.score>=65 &&
                r.r9<80 &&
@@ -3578,6 +3800,10 @@
     const sorted=[...rows];
     sorted.sort((a,b)=>{
       switch(screenSort){
+        case "watchRank":
+          return (b.watchRank?.score??-1)-(a.watchRank?.score??-1)
+            || (b.priority?.score??-1)-(a.priority?.score??-1)
+            || b.r.timingScore-a.r.timingScore;
         case "ta": return b.r.score-a.r.score;
         case "div": return b.bullDiv-a.bullDiv || b.r.timingScore-a.r.timingScore;
         case "pb": return Math.abs(a.pbDist)-Math.abs(b.pbDist);
@@ -3611,12 +3837,46 @@
   function presetTitle(){
     return {
       all:"すべて",
+      priority:"優先監視",
       pullback:"押し目",
       divergence:"DIV反転",
       breakout:"ブレイク",
       oversold:"売られ過ぎ",
       takeprofit:"利確警戒"
     }[screenPreset] || "すべて";
+  }
+
+  function renderWatchRankSummary(rows){
+    const box=$("watchRankSummary");
+    if(!box) return;
+    if(!rows.length){
+      box.innerHTML="";
+      return;
+    }
+
+    const top=[...rows]
+      .sort((a,b)=>(b.watchRank?.score??-1)-(a.watchRank?.score??-1))
+      .slice(0,3);
+
+    box.innerHTML=`
+      <div class="rank-head">
+        <div class="title2">監視ランキング TOP ${top.length}</div>
+        <div class="note">買い推奨ではなく「先に確認する順」</div>
+      </div>
+      <div class="rank-top3">
+        ${top.map((x,i)=>`
+          <div class="rank-pick ${i===0?"first":""}" data-rank-symbol="${esc(x.item.symbol)}">
+            <div class="pos">#${i+1} ${monitoringGrade(x.watchRank.score)}</div>
+            <div class="sym">${esc(x.item.symbol)}</div>
+            <div class="score">${Math.round(x.watchRank.score)}</div>
+            <div class="meta">${esc(x.watchRank.label)}<br>${x.watchRank.type==="reversal"?"反転":"順張り"} / ${esc(x.r.stage?.label||"Stage不明")}</div>
+          </div>
+        `).join("")}
+      </div>`;
+
+    box.querySelectorAll("[data-rank-symbol]").forEach(el=>{
+      el.addEventListener("click",()=>showDetail(el.dataset.rankSymbol));
+    });
   }
 
   function renderScreener(){
@@ -3629,6 +3889,7 @@
       else missing++;
     });
     const matched=sortScreenRows(rows.filter(passesPreset));
+    renderWatchRankSummary(matched);
 
     $("scanCount").textContent=rows.length;
     $("scanMatch").textContent=matched.length;
@@ -3657,6 +3918,26 @@
             <div class="screen-symbol">${esc(x.item.symbol)}</div>
             <div class="screen-action">${esc(r.action)} ・ ${esc(r.stage.label)} ・ ${esc(mode)}</div>
           </div>
+        </div>
+
+        <div class="watch-rank-card ${x.watchRank?.score>=80?"best":""}">
+          <div class="watch-rank-left">
+            <div class="watch-rank-title">監視Rank ・ ${monitoringGrade(x.watchRank?.score||0)}</div>
+            <div class="watch-rank-label">${esc(x.watchRank?.label||"—")} / ${x.watchRank?.type==="reversal"?"反転":"順張り"}</div>
+            <div class="watch-rank-reason">${(x.watchRank?.reasons||[]).slice(0,4).map(esc).join(" / ")}</div>
+          </div>
+          <div>
+            <div class="watch-rank-score">${Math.round(x.watchRank?.score||0)}</div>
+            <div class="watch-rank-grade">情報信頼 ${esc(x.watchRank?.confidence||"参考")}</div>
+          </div>
+        </div>
+        <div class="watch-factor-row">
+          <div class="watch-factor"><div class="k">戦略</div><div class="v">${Math.round(x.watchRank?.factors?.strategy||0)}</div></div>
+          <div class="watch-factor"><div class="k">Timing</div><div class="v">${Math.round(x.watchRank?.factors?.timing||0)}</div></div>
+          <div class="watch-factor"><div class="k">類似</div><div class="v">${Math.round(x.watchRank?.factors?.empirical||0)}</div></div>
+          <div class="watch-factor"><div class="k">T-SL</div><div class="v">${Math.round(x.watchRank?.factors?.risk||0)}</div></div>
+          <div class="watch-factor"><div class="k">Stage</div><div class="v">${Math.round(x.watchRank?.factors?.stage||0)}</div></div>
+          <div class="watch-factor"><div class="k">52W</div><div class="v">${Math.round(x.watchRank?.factors?.range||0)}</div></div>
         </div>
 
         <div class="dual-score">
@@ -4598,7 +4879,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0225.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v023.js",{
           updateViaCache:"none"
         });
         await reg.update();
