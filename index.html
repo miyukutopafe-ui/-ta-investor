@@ -44,6 +44,13 @@
       display: flex; align-items: center; gap: 10px;
     }
     .title { font-weight: 800; font-size: 22px; flex: 1; letter-spacing: -.3px; }
+    .version-badge{
+      display:inline-block;vertical-align:middle;margin-left:5px;
+      padding:2px 6px;border-radius:999px;
+      border:1px solid rgba(74,216,255,.28);
+      background:rgba(74,216,255,.08);
+      color:#9deaff;font-size:9px;font-weight:700;letter-spacing:0;
+    }
     .iconbtn {
       width: 42px; height: 42px; border: 0; border-radius: 14px;
       background: var(--card2); color: var(--text); font-size: 20px;
@@ -523,7 +530,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor</div>
+    <div class="title">TA Investor <span class="version-badge">v0.22.4</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -717,6 +724,7 @@
 (() => {
   "use strict";
 
+  const APP_BUILD = "0.22.4";
   const $ = (id) => document.getElementById(id);
   const store = {
     get apiKey() { return localStorage.getItem("ta_api_key") || ""; },
@@ -3009,7 +3017,7 @@
 
     box.innerHTML=`
       <div class="sim-note">
-        Strategy Calibration 3.2（v0.22.3）では、短期/フル履歴と順張り/反転に加え、
+        Strategy Calibration 3.2（v0.22.4）では、短期/フル履歴と順張り/反転に加え、
         反転はRegular/Hidden DIV・売られ過ぎ・出来高・Stageなどから「反転アーキタイプ」を判定し、
         同型または同系統の過去局面を優先します。
         順張りはStage・Timing・Bull Trigger・Context・Tactical Riskを重視し、
@@ -4423,7 +4431,23 @@
   });
 
   if("serviceWorker" in navigator){
-    window.addEventListener("load",()=>navigator.serviceWorker.register("./service-worker.js").catch(()=>{}));
+    window.addEventListener("load",async()=>{
+      try{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0224.js",{
+          updateViaCache:"none"
+        });
+        await reg.update();
+
+        let reloading=false;
+        navigator.serviceWorker.addEventListener("controllerchange",()=>{
+          if(reloading) return;
+          reloading=true;
+          location.reload();
+        });
+      }catch(e){
+        console.warn("Service worker update failed:",e);
+      }
+    });
   }
 
   renderWatchlist();
