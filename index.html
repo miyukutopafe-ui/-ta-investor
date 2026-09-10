@@ -760,6 +760,33 @@
     .next-open-zone-action .good{color:var(--green)}
     .next-open-zone-action .warn{color:#ffd58b}
     .next-open-zone-note{margin-top:6px;font-size:7px;color:var(--muted);line-height:1.5}
+    .bench-note{
+      padding:11px 12px;border-radius:13px;background:rgba(102,174,255,.05);
+      border:1px solid rgba(102,174,255,.16);color:var(--muted);font-size:10px;line-height:1.55;
+      margin-bottom:10px;
+    }
+    .bench-list{display:grid;gap:9px;margin-top:10px}
+    .bench-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:var(--shadow)}
+    .bench-card-top{display:flex;align-items:flex-start;gap:8px}
+    .bench-card .sym{font-size:18px;font-weight:950}
+    .bench-card .meta{font-size:9px;color:var(--muted);line-height:1.4;margin-top:3px}
+    .bench-badges{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+    .bench-badge{display:inline-flex;padding:3px 6px;border-radius:999px;border:1px solid var(--line);font-size:8px;font-weight:900}
+    .bench-badge.win{color:var(--green);border-color:rgba(67,209,123,.28)}
+    .bench-badge.loss{color:var(--red);border-color:rgba(255,95,103,.28)}
+    .bench-badge.skip{color:var(--yellow);border-color:rgba(242,214,75,.28)}
+    .bench-badge.na{color:var(--muted)}
+    .bench-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:9px}
+    .bench-box{padding:8px;border-radius:10px;background:var(--card2);border:1px solid rgba(255,255,255,.04)}
+    .bench-box .k{font-size:8px;color:var(--muted)}
+    .bench-box .v{font-size:13px;font-weight:900;margin-top:3px;line-height:1.25}
+    .bench-box .s{font-size:7px;color:var(--muted);line-height:1.4;margin-top:4px}
+    .bench-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:10px 0}
+    .bench-summary .summary-box .v{font-size:18px}
+    .bench-zone-in{color:var(--green)}
+    .bench-zone-out{color:var(--yellow)}
+    .bench-zone-na{color:var(--muted)}
+
     .toast {
       position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%);
       background:#272b34; color:#fff; padding:10px 14px; border-radius:12px; font-size:12px; z-index:200;
@@ -770,7 +797,7 @@
 <body>
 <div class="app">
   <header id="listHeader">
-    <div class="title">TA Investor <span class="version-badge">v0.24.5</span></div>
+    <div class="title">TA Investor <span class="version-badge">v0.24.6</span></div>
     <button class="iconbtn" id="reorderBtn" aria-label="並べ替え">⇅</button>
     <button class="iconbtn" id="refreshAllBtn" aria-label="更新">↻</button>
     <button class="iconbtn" id="settingsBtn" aria-label="設定">⚙︎</button>
@@ -787,6 +814,7 @@
       <div class="top-tabs">
         <button class="top-tab active" id="watchTabBtn">ウォッチリスト</button>
         <button class="top-tab" id="screenTabBtn">スクリーナー</button>
+        <button class="top-tab" id="benchTabBtn">比較検証</button>
       </div>
 
       <div id="watchPanel">
@@ -866,6 +894,25 @@
           </div>
           <div id="calProgress" class="cal-progress">まだ校正していません。</div>
           <div id="calibrationResults"></div>
+        </div>
+      </div>
+
+      <div id="benchPanel" class="hidden">
+        <div class="screen-head">
+          <div class="grow">
+            <h2>Sun Liao 比較検証</h2>
+            <p>公開コール10件を、投稿後に約定できる翌営業日始値で統一比較します。TA Investor側は投稿日前までのデータだけで再計算し、Tactical SL / 2Rと、当時までの類似局面だけで作るEntry Zoneを検証します。</p>
+          </div>
+          <button class="secondary" id="runBenchBtn">10件を検証</button>
+        </div>
+        <div class="bench-note">
+          No-Lookahead：投稿日が取引日の場合も、その日の終値は使わず「投稿日より前に確定していた日足」だけで判定します。Sun側は翌営業日寄りで一律エントリー、+20% / -10%の先着を20営業日で判定。TA Investor CoreはPriority 68以上またはエントリー系判定でのみエントリーし、T-SL / 2Rを先着判定します。
+        </div>
+        <div id="benchProgress" class="calibration-status">未実行です。APIキーを設定して「10件を検証」を押してください。</div>
+        <div id="benchSummary"></div>
+        <div id="benchResults" class="bench-list"></div>
+        <div class="bench-note" style="margin-top:12px;">
+          8銘柄一括投稿は2026-01-18。SPIRは2026-04-08のロング投稿。VPGは2026-06-29を暫定採用しています。VPGの一次投稿日時が確定した場合は日付を差し替えて再検証します。
         </div>
       </div>
     </section>
@@ -987,7 +1034,7 @@
 (() => {
   "use strict";
 
-  const APP_BUILD = "0.24.4";
+  const APP_BUILD = "0.24.6";
   const $ = (id) => document.getElementById(id);
   let calibrationMemory = undefined;
   const store = {
@@ -1038,6 +1085,9 @@
   let screenerCalibrationError = null;
   const screenerMetricMemo = new Map();
   let calibrationRenderKey = null;
+  let benchmarkState={running:false,results:null,error:null};
+  const benchmarkCandleMap=new Map();
+  const benchmarkCalibrationMap=new Map();
 
   function toast(msg) {
     $("toast").textContent = msg;
@@ -4835,6 +4885,329 @@
     return "D";
   }
 
+  // ---------- v0.24.6 Sun Liao Benchmark ----------
+
+  const SUN_BENCHMARK_CALLS=[
+    {symbol:"LPTH",postDate:"2026-01-18",postedPrice:12.57,source:"8銘柄一括"},
+    {symbol:"OSS", postDate:"2026-01-18",postedPrice:10.66,source:"8銘柄一括"},
+    {symbol:"PL",  postDate:"2026-01-18",postedPrice:28.78,source:"8銘柄一括"},
+    {symbol:"RDW", postDate:"2026-01-18",postedPrice:11.71,source:"8銘柄一括"},
+    {symbol:"RR",  postDate:"2026-01-18",postedPrice:3.88, source:"8銘柄一括"},
+    {symbol:"SATL",postDate:"2026-01-18",postedPrice:3.56, source:"8銘柄一括"},
+    {symbol:"TE",  postDate:"2026-01-18",postedPrice:8.17, source:"8銘柄一括"},
+    {symbol:"ZETA",postDate:"2026-01-18",postedPrice:20.26,source:"8銘柄一括"},
+    {symbol:"SPIR",postDate:"2026-04-08",postedPrice:null,source:"Long / target $30"},
+    {symbol:"VPG", postDate:"2026-06-29",postedPrice:null,source:"Bought / robotics",dateConfidence:"暫定"}
+  ];
+
+  function sleepMs(ms){ return new Promise(resolve=>setTimeout(resolve,ms)); }
+
+  function benchmarkOutcomeLabel(x){
+    return {W:"WIN",L:"LOSS",T:"TIME",B:"同日両方",S:"SKIP",I:"無効"}[x]||"—";
+  }
+
+  function benchmarkStatusClass(x){
+    if(x==="W") return "win";
+    if(x==="L"||x==="B") return "loss";
+    if(x==="S"||x==="I") return "skip";
+    return "na";
+  }
+
+  function fixedPercentOutcome(candles,entryIndex,tpPct=20,slPct=10,horizon=20){
+    if(entryIndex<0||entryIndex>=candles.length) return null;
+    const entry=Number(candles[entryIndex].open);
+    if(!(entry>0)) return null;
+    const tp=entry*(1+tpPct/100);
+    const sl=entry*(1-slPct/100);
+    const path=candles.slice(entryIndex,Math.min(candles.length,entryIndex+horizon));
+    let outcome="T",hitDate=null;
+    for(const c of path){
+      const hitTP=c.high>=tp;
+      const hitSL=c.low<=sl;
+      if(hitTP&&hitSL){outcome="B";hitDate=c.date;break;}
+      if(hitTP){outcome="W";hitDate=c.date;break;}
+      if(hitSL){outcome="L";hitDate=c.date;break;}
+    }
+    const exit=path[path.length-1]?.close??entry;
+    const ret=(exit-entry)/entry*100;
+    return {entry:round2(entry),tp:round2(tp),sl:round2(sl),outcome,hitDate,return20:round1(ret)};
+  }
+
+  function tactical2ROutcome(candles,entryIndex,stop,horizon=20){
+    if(entryIndex<0||entryIndex>=candles.length||!(stop>0)) return null;
+    const entry=Number(candles[entryIndex].open);
+    if(!(entry>0)) return null;
+    if(entry<=stop){
+      return {entry:round2(entry),stop:round2(stop),tp:null,outcome:"I",hitDate:candles[entryIndex].date,return20:0,riskPct:0};
+    }
+    const risk=entry-stop;
+    const tp=entry+2*risk;
+    const path=candles.slice(entryIndex,Math.min(candles.length,entryIndex+horizon));
+    let outcome="T",hitDate=null;
+    for(const c of path){
+      const hitTP=c.high>=tp;
+      const hitSL=c.low<=stop;
+      // Conservative: if daily OHLC touches both, count the stop first.
+      if(hitTP&&hitSL){outcome="L";hitDate=c.date;break;}
+      if(hitTP){outcome="W";hitDate=c.date;break;}
+      if(hitSL){outcome="L";hitDate=c.date;break;}
+    }
+    const exit=path[path.length-1]?.close??entry;
+    return {
+      entry:round2(entry),stop:round2(stop),tp:round2(tp),outcome,hitDate,
+      return20:round1((exit-entry)/entry*100),riskPct:round1(risk/entry*100)
+    };
+  }
+
+  function benchmarkSignalHistory(candles,postDate){
+    return candles.filter(c=>c.date<postDate);
+  }
+
+  function benchmarkExecutionIndex(candles,postDate){
+    return candles.findIndex(c=>c.date>postDate);
+  }
+
+  async function getBenchmarkCandles(symbol,progress){
+    if(benchmarkCandleMap.has(symbol)) return benchmarkCandleMap.get(symbol);
+    const cached=cache[symbol]?.candles;
+    if(Array.isArray(cached)&&cached.length>=60){
+      benchmarkCandleMap.set(symbol,cached);
+      return cached;
+    }
+
+    let lastErr=null;
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        progress?.(`${symbol} の日足を取得中…`);
+        const candles=await fetchCandles(symbol);
+        benchmarkCandleMap.set(symbol,candles);
+        return candles;
+      }catch(e){
+        lastErr=e;
+        const msg=String(e?.message||e);
+        if(attempt<2&&/credit|rate|limit|too many|429/i.test(msg)){
+          progress?.(`${symbol}: API上限のため約65秒待機して再試行します…`);
+          await sleepMs(65000);
+          continue;
+        }
+        break;
+      }
+    }
+    throw lastErr||new Error(`${symbol} のデータ取得に失敗しました`);
+  }
+
+  async function buildBenchmarkCalibration(postDate,candleMap,progress){
+    if(benchmarkCalibrationMap.has(postDate)) return benchmarkCalibrationMap.get(postDate);
+    const rows=[];
+    const syms=[...new Set(SUN_BENCHMARK_CALLS.map(x=>x.symbol))];
+
+    for(let i=0;i<syms.length;i++){
+      const sym=syms[i];
+      const full=candleMap.get(sym)||[];
+      const hist=benchmarkSignalHistory(full,postDate);
+      if(hist.length<75) continue;
+      progress?.(`過去校正 ${postDate}：${i+1}/${syms.length} ${sym}`);
+      rows.push(...await calibrationSnapshotsForSymbol(sym,hist,20,5,40));
+      await sleepMs(0);
+    }
+
+    const bucketNames=["0-19","20-39","40-59","60-79","80-100"];
+    const modeBuckets={F:{},S:{}};
+    ["F","S"].forEach(mode=>{
+      bucketNames.forEach(b=>{
+        modeBuckets[mode][b]=summarizeCompact(rows.filter(x=>x.m===mode&&timingBucket(x.t)===b));
+      });
+    });
+
+    const cal={
+      version:"v0.22",horizon:20,step:5,pathSchema:3,pathDays:40,
+      executionBasis:"NEXT_OPEN",generatedAt:`historical:${postDate}`,
+      symbols:syms,samples:rows.length,samplesCompact:rows,
+      modeSamples:{F:rows.filter(x=>x.m==="F").length,S:rows.filter(x=>x.m==="S").length},
+      modeBuckets,conditionModes:{F:{},S:{}},strategyModes:{F:{},S:{}}
+    };
+    benchmarkCalibrationMap.set(postDate,cal);
+    return cal;
+  }
+
+  function benchmarkWithCalibration(cal,fn){
+    const previous=store.calibration;
+    calibrationMemory=cal;
+    try{return fn();}
+    finally{calibrationMemory=previous;}
+  }
+
+  function benchmarkSelectedEmpirical(priority,bundle){
+    if(priority?.type==="reversal") return bundle?.reversal||bundle?.generic||null;
+    return bundle?.trend||bundle?.generic||null;
+  }
+
+  async function evaluateBenchmarkCall(call,candles,cal){
+    const hist=benchmarkSignalHistory(candles,call.postDate);
+    const entryIndex=benchmarkExecutionIndex(candles,call.postDate);
+    if(hist.length<35||entryIndex<0) throw new Error("判定に必要な日足が不足しています");
+
+    const r=evaluateTA(call.symbol,hist);
+    let bundle={generic:null,trend:null,reversal:null};
+    let priority=null;
+
+    benchmarkWithCalibration(cal,()=>{
+      try{ bundle=strategyEmpiricals(r,call.symbol)||bundle; }catch{}
+      try{ priority=entryPriority(r,bundle); }catch{ priority=entryPriority(r,null); }
+    });
+
+    const sun=fixedPercentOutcome(candles,entryIndex,20,10,20);
+    const stop=Number(r.timingBreakdown?.entryStop??r.tradePlan?.tacticalStop??r.tradePlan?.stopLoss);
+    const coreSim=tactical2ROutcome(candles,entryIndex,stop,20);
+    const executionOpen=Number(candles[entryIndex].open);
+    const signalClose=Number(hist[hist.length-1].close);
+    const gapPct=round1((executionOpen-signalClose)/signalClose*100);
+
+    const empirical=benchmarkSelectedEmpirical(priority,bundle);
+    const zone=empirical?.waitAnalysis?.nextOpenZone||null;
+    let zoneStatus="NA";
+    if(zone?.available){
+      zoneStatus=(gapPct>=zone.lower-1e-9&&gapPct<=zone.upper+1e-9)?"IN":"OUT";
+    }
+
+    const coreGate=(
+      r.action!=="利確警戒"&&
+      ((priority?.score??0)>=68 || r.action==="エントリー候補" || r.action==="シグナル点灯")
+    );
+    const coreTrade=coreGate&&coreSim?.outcome!=="I";
+    const coreOutcome=coreTrade?(coreSim?.outcome||"T"):"S";
+
+    const strictTrade=coreTrade&&zoneStatus==="IN";
+    const strictOutcome=strictTrade?(coreSim?.outcome||"T"):(zoneStatus==="NA"?"N":"S");
+
+    return {
+      call,signalDate:hist[hist.length-1].date,executionDate:candles[entryIndex].date,
+      signalClose:round2(signalClose),executionOpen:round2(executionOpen),gapPct,
+      r,priority,bundle,empirical,zone,zoneStatus,
+      sun,coreSim,coreGate,coreTrade,coreOutcome,strictTrade,strictOutcome
+    };
+  }
+
+  function renderBenchmark(){
+    const results=benchmarkState.results;
+    if(!results){
+      $("benchSummary").innerHTML="";
+      $("benchResults").innerHTML="";
+      return;
+    }
+
+    const sunWins=results.filter(x=>x.sun?.outcome==="W").length;
+    const sunLosses=results.filter(x=>x.sun?.outcome==="L"||x.sun?.outcome==="B").length;
+    const coreEntries=results.filter(x=>x.coreTrade).length;
+    const coreWins=results.filter(x=>x.coreTrade&&x.coreSim?.outcome==="W").length;
+    const coreLosses=results.filter(x=>x.coreTrade&&x.coreSim?.outcome==="L").length;
+    const coreTimes=results.filter(x=>x.coreTrade&&x.coreSim?.outcome==="T").length;
+    const skips=results.length-coreEntries;
+    const avoided=results.filter(x=>(x.sun?.outcome==="L"||x.sun?.outcome==="B")&&!x.coreTrade).length;
+    const missed=results.filter(x=>x.sun?.outcome==="W"&&!x.coreTrade).length;
+    const zoneKnown=results.filter(x=>x.coreTrade&&x.zoneStatus!=="NA");
+    const zoneFilteredLoss=zoneKnown.filter(x=>x.zoneStatus==="OUT"&&(x.sun?.outcome==="L"||x.sun?.outcome==="B")).length;
+    const zoneFilteredWin=zoneKnown.filter(x=>x.zoneStatus==="OUT"&&x.sun?.outcome==="W").length;
+
+    $("benchSummary").innerHTML=`
+      <div class="bench-summary">
+        <div class="summary-box"><div class="k">Sun +20/-10</div><div class="v">${sunWins}勝${sunLosses}敗</div></div>
+        <div class="summary-box"><div class="k">TA Core</div><div class="v">${coreWins}勝${coreLosses}敗</div></div>
+        <div class="summary-box"><div class="k">Core見送り</div><div class="v">${skips}</div></div>
+        <div class="summary-box"><div class="k">負け回避</div><div class="v bt-good">${avoided}</div></div>
+        <div class="summary-box"><div class="k">勝ち取り逃し</div><div class="v ${missed?"bt-bad":"bt-good"}">${missed}</div></div>
+        <div class="summary-box"><div class="k">Core TIME</div><div class="v">${coreTimes}</div></div>
+      </div>
+      <div class="bench-note">
+        Entry Zone判定可能 ${zoneKnown.length}/${coreEntries}件。Zone外でSunの負けを除外 ${zoneFilteredLoss}件 / Sunの勝ちを除外 ${zoneFilteredWin}件。<br>
+        Core比較は「シグナルを出すか」の能力、Entry Zoneは「翌日寄りで追いかけてよいか」の追加フィルターとして分けて見ます。
+      </div>`;
+
+    $("benchResults").innerHTML=results.map(x=>{
+      const sunOut=x.sun?.outcome||"T";
+      const coreOut=x.coreOutcome;
+      const zoneText=x.zoneStatus==="IN"
+        ? `IN ${fmtSignedPct(x.zone.lower)}〜${fmtSignedPct(x.zone.upper)}`
+        : x.zoneStatus==="OUT"
+          ? `OUT ${fmtSignedPct(x.zone.lower)}〜${fmtSignedPct(x.zone.upper)}`
+          : "参考外";
+      const zoneCls=x.zoneStatus==="IN"?"bench-zone-in":x.zoneStatus==="OUT"?"bench-zone-out":"bench-zone-na";
+      return `<div class="bench-card">
+        <div class="bench-card-top">
+          <div class="grow">
+            <div class="sym">${esc(x.call.symbol)}</div>
+            <div class="meta">投稿日 ${esc(x.call.postDate)}${x.call.dateConfidence?`（${esc(x.call.dateConfidence)}）`:""} / 判定足 ${esc(x.signalDate)} / 約定候補 ${esc(x.executionDate)}</div>
+          </div>
+          <div class="bench-badges">
+            <span class="bench-badge ${benchmarkStatusClass(sunOut)}">Sun ${benchmarkOutcomeLabel(sunOut)}</span>
+            <span class="bench-badge ${benchmarkStatusClass(coreOut)}">TA ${benchmarkOutcomeLabel(coreOut)}</span>
+          </div>
+        </div>
+        <div class="bench-grid">
+          <div class="bench-box"><div class="k">Sun翌日寄り</div><div class="v">${money(x.sun.entry)}</div><div class="s">TP ${money(x.sun.tp)} / SL ${money(x.sun.sl)} / 20D ${pct(x.sun.return20)}</div></div>
+          <div class="bench-box"><div class="k">TA判定</div><div class="v">Priority ${Math.round(x.priority?.score||0)} / ${esc(x.priority?.label||"—")}</div><div class="s">TA ${Math.round(x.r.score)} / Timing ${Math.round(x.r.timingScore)} / ${esc(x.r.action)}</div></div>
+          <div class="bench-box"><div class="k">TA T-SL / 2R</div><div class="v">${x.coreSim?`${money(x.coreSim.stop)} / ${x.coreSim.tp?money(x.coreSim.tp):"—"}`:"—"}</div><div class="s">Risk ${x.coreSim?.riskPct?.toFixed?.(1)??"—"}% / Core ${x.coreTrade?"ENTRY":"SKIP"}</div></div>
+          <div class="bench-box"><div class="k">翌日Gap / Entry Zone</div><div class="v ${zoneCls}">${fmtSignedPct(x.gapPct)} / ${zoneText}</div><div class="s">シグナル終値 ${money(x.signalClose)} → 始値 ${money(x.executionOpen)}</div></div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  async function runSunBenchmark(){
+    if(benchmarkState.running) return;
+    if(!store.apiKey){openSettings();return;}
+    benchmarkState.running=true;
+    benchmarkState.error=null;
+    const btn=$("runBenchBtn");
+    btn.disabled=true;
+    btn.textContent="検証中";
+    $("benchSummary").innerHTML="";
+    $("benchResults").innerHTML="";
+
+    const progress=msg=>{
+      $("benchProgress").className="calibration-status warn";
+      $("benchProgress").textContent=msg;
+    };
+
+    try{
+      const syms=[...new Set(SUN_BENCHMARK_CALLS.map(x=>x.symbol))];
+      const candleMap=new Map();
+      for(let i=0;i<syms.length;i++){
+        progress(`市場データ ${i+1}/${syms.length}：${syms[i]}`);
+        candleMap.set(syms[i],await getBenchmarkCandles(syms[i],progress));
+      }
+
+      const dates=[...new Set(SUN_BENCHMARK_CALLS.map(x=>x.postDate))].sort();
+      const calMap=new Map();
+      for(let i=0;i<dates.length;i++){
+        progress(`No-Lookahead校正 ${i+1}/${dates.length}：${dates[i]}`);
+        calMap.set(dates[i],await buildBenchmarkCalibration(dates[i],candleMap,progress));
+      }
+
+      const results=[];
+      for(let i=0;i<SUN_BENCHMARK_CALLS.length;i++){
+        const call=SUN_BENCHMARK_CALLS[i];
+        progress(`比較 ${i+1}/${SUN_BENCHMARK_CALLS.length}：${call.symbol}`);
+        const r=await evaluateBenchmarkCall(call,candleMap.get(call.symbol),calMap.get(call.postDate));
+        results.push(r);
+        await sleepMs(0);
+      }
+
+      benchmarkState.results=results;
+      $("benchProgress").className="calibration-status ok";
+      $("benchProgress").textContent=`完了：10コール / ${dates.length}時点の履歴校正。未来の日足を判定入力には使用していません。`;
+      renderBenchmark();
+    }catch(e){
+      benchmarkState.error=String(e?.message||e);
+      $("benchProgress").className="calibration-status error";
+      $("benchProgress").textContent=`比較検証エラー：${benchmarkState.error}`;
+    }finally{
+      benchmarkState.running=false;
+      btn.disabled=false;
+      btn.textContent="10件を再検証";
+    }
+  }
+
   // ---------- Rendering ----------
 
   function screenMetricsCore(item){
@@ -5243,13 +5616,18 @@
 
   function setListMode(mode){
     listMode=mode;
+    const watching=mode==="watch";
     const screening=mode==="screen";
-    $("watchPanel").classList.toggle("hidden",screening);
+    const benchmarking=mode==="bench";
+    $("watchPanel").classList.toggle("hidden",!watching);
     $("screenPanel").classList.toggle("hidden",!screening);
-    $("watchTabBtn").classList.toggle("active",!screening);
+    $("benchPanel").classList.toggle("hidden",!benchmarking);
+    $("watchTabBtn").classList.toggle("active",watching);
     $("screenTabBtn").classList.toggle("active",screening);
-    $("reorderBtn").classList.toggle("hidden",screening);
+    $("benchTabBtn").classList.toggle("active",benchmarking);
+    $("reorderBtn").classList.toggle("hidden",!watching);
     if(screening) renderScreener();
+    else if(benchmarking) renderBenchmark();
     else renderWatchlist();
   }
 
@@ -5318,6 +5696,7 @@
     $("listView").classList.remove("hidden");
     $("listHeader").classList.remove("hidden");
     if(listMode==="screen") renderScreener();
+    else if(listMode==="bench") renderBenchmark();
     else renderWatchlist();
     window.scrollTo({top:0,behavior:"instant"});
   }
@@ -5849,7 +6228,7 @@
   function closeSettings(){ $("settingsModal").classList.add("hidden"); }
 
   $("reorderBtn").addEventListener("click",()=>{
-    if(listMode==="screen") setListMode("watch");
+    if(listMode!=="watch") setListMode("watch");
     reorderMode=!reorderMode;
     renderWatchlist();
     toast(reorderMode?"並べ替えモード：↑↓で順番を変更":"並べ替えを終了しました");
@@ -5860,6 +6239,8 @@
     setListMode("screen");
     updateCalibrationStatusUI();
   });
+  $("benchTabBtn").addEventListener("click",()=>setListMode("bench"));
+  $("runBenchBtn").addEventListener("click",()=>runSunBenchmark());
 
   document.querySelectorAll(".preset").forEach(btn=>{
     btn.addEventListener("click",()=>{
@@ -6090,7 +6471,7 @@
   if("serviceWorker" in navigator){
     window.addEventListener("load",async()=>{
       try{
-        const reg=await navigator.serviceWorker.register("./service-worker-v0245.js",{
+        const reg=await navigator.serviceWorker.register("./service-worker-v0246.js",{
           updateViaCache:"none"
         });
         await reg.update();
